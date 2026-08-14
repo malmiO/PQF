@@ -46,7 +46,7 @@ TQS_HARD_REJECT = 0.40
 
 # T1 — Sharpness (Laplacian variance). Resolution-dependent; only meaningful
 # at WORKING_LONGEST_SIDE. sharpness_norm = clip(var / S_MAX, 0, 1).
-CALIBRATED_SHARPNESS_SMAX = 1000.0   # placeholder → set in Phase B
+CALIBRATED_SHARPNESS_SMAX = 2057.0   
 
 # T2 — Exposure (mean luminance in [0,255]). Penalise distance from ideal band.
 T2_IDEAL_LOW = 100.0
@@ -66,7 +66,7 @@ T5_PIQE_MAX = 100.0
 # T6 — Colour-cast detection (v1.2). Grey-world in the T3 neutral region only.
 # Detects CAST CONDITIONS, not colour accuracy (needs an in-frame reference
 # card — future work; see decisions.md 2026-08-13).
-CALIBRATED_COLORCAST_CMAX = 20.0     # placeholder → set in Phase B
+CALIBRATED_COLORCAST_CMAX = 5.0     
 T6_MIN_NEUTRAL_FRACTION = 0.05       # below this, T6 abstains → returns 1.0
 T6_PASS_THRESHOLD = 0.60             # initial; final value from calibration
 
