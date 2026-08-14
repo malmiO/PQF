@@ -30,7 +30,7 @@ mobile/.flutter-plugins*
 .vscode/
 *.bak
 
-backend/
+
 data/
 docs/
 
