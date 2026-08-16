@@ -1,0 +1,47 @@
+# Data — never commit images or the frozen split (large, licence, privacy)
+data/abo/*
+data/phone/**
+data/batches/**
+data/external/*
+data/splits/*
+!data/**/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Secrets — API keys must never be committed
+.env
+*.key
+backend/api/secrets.py
+
+# Flutter
+mobile/
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.bak
+
+
+data/
+docs/
+
+data/abo/*
+data/phone/**
+data/batches/**
+data/external/*
+data/splits/*
+!data/**/.gitkeep
+.env
+*.key
+backend/api/secrets.py
+__pycache__/
+node_modules/
