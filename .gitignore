@@ -45,3 +45,5 @@ data/splits/*
 backend/api/secrets.py
 __pycache__/
 node_modules/
+
+diagnose_gemini.py

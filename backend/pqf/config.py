@@ -125,7 +125,6 @@ ROLE_PRIORITY = ["hero_shot", "angle_shot", "detail_shot"]  # first match wins; 
 
 # ---------------------------------------------------------------------------
 # Semantic evaluator (Phase C)
-# ---------------------------------------------------------------------------
-GEMINI_MODEL = "gemini-flash"        # pinned; exact id set in client
+GEMINI_MODEL = "gemini-flash-lite-latest"     # pinned; exact id set in client
 GEMINI_TEMPERATURE = 0.0
 PROMPT_VERSION = "pqf-sem-v1"

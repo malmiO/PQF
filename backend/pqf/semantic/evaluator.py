@@ -11,7 +11,7 @@ Design rules baked in:
   the pipeline and tests run without a key or credit.
 
 Env:
-  GEMINI_API_KEY   — your key (loaded from .env, never committed)
+  GEMINI_API_KEY   — API key (loaded from .env, never committed)
   PQF_SEMANTIC_MOCK=1 — force mock mode (used by tests / dry runs)
 """
 from __future__ import annotations
@@ -91,26 +91,36 @@ def _mock_evaluate(image_bytes: bytes) -> SemanticResult:
 
 
 # ---------------------------------------------------------------------------
-# Real Gemini call
+# Real Gemini call — uses the NEW google-genai SDK (the old google-generativeai
+# package reached end-of-life 2025-11-30). Install: pip install google-genai
 # ---------------------------------------------------------------------------
 def _gemini_evaluate(image_bytes: bytes, mime: str = "image/jpeg") -> SemanticResult:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return SemanticResult(ok=False, error="GEMINI_API_KEY not set")
     try:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types
     except ImportError:
-        return SemanticResult(ok=False, error="google-generativeai not installed")
+        return SemanticResult(
+            ok=False,
+            error="google-genai not installed (pip install google-genai)",
+        )
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(config.GEMINI_MODEL)
     try:
-        resp = model.generate_content(
-            [build_prompt(), {"mime_type": mime, "data": image_bytes}],
-            generation_config={"temperature": config.GEMINI_TEMPERATURE},
+        client = genai.Client(api_key=api_key)
+        resp = client.models.generate_content(
+            model=config.GEMINI_MODEL,
+            contents=[
+                build_prompt(),
+                types.Part.from_bytes(data=image_bytes, mime_type=mime),
+            ],
+            config=types.GenerateContentConfig(
+                temperature=config.GEMINI_TEMPERATURE,
+            ),
         )
         return _parse_response(resp.text)
-    except Exception as e:  # network / quota / safety etc.
+    except Exception as e:  # network / quota / safety / model-not-found etc.
         return SemanticResult(ok=False, error=f"gemini call failed: {e}")
 
 
