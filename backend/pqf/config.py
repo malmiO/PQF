@@ -46,7 +46,7 @@ TQS_HARD_REJECT = 0.40
 
 # T1 — Sharpness (Laplacian variance). Resolution-dependent; only meaningful
 # at WORKING_LONGEST_SIDE. sharpness_norm = clip(var / S_MAX, 0, 1).
-CALIBRATED_SHARPNESS_SMAX = 2057.0   # placeholder → set in Phase B
+CALIBRATED_SHARPNESS_SMAX = 1134.6   # placeholder → set in Phase B
 
 # T2 — Exposure (mean luminance in [0,255]). Penalise distance from ideal band.
 T2_IDEAL_LOW = 100.0
@@ -125,6 +125,15 @@ ROLE_PRIORITY = ["hero_shot", "angle_shot", "detail_shot"]  # first match wins; 
 
 # ---------------------------------------------------------------------------
 # Semantic evaluator (Phase C)
-GEMINI_MODEL = "gemini-flash-lite-latest"     # pinned; exact id set in client
+# ---------------------------------------------------------------------------
+GEMINI_MODEL = "gemini-flash-lite-latest"  # Gemini 3.5 Flash-Lite; pin & record resolved version at validation
 GEMINI_TEMPERATURE = 0.0
 PROMPT_VERSION = "pqf-sem-v1"
+
+# --- Product-region localisation (added when T1/T2/T5 moved to product region) ---
+# Catalogue composition means the product is the non-near-white area. These
+# guard values keep the segmentation sane on unusual images.
+PRODUCT_MIN_FRACTION = 0.02        # below this, fall back to the central region
+PRODUCT_FALLBACK_FRACTION = 0.50   # central box side fraction used as fallback
+PRODUCT_CROP_MARGIN_PX = 12        # margin around the product bounding box
+PIQE_MIN_CROP_PX = 64              # below this the crop is too small for PIQE

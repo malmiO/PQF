@@ -30,11 +30,92 @@ def t0_compliance(img: np.ndarray) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Product-region localisation
+# ---------------------------------------------------------------------------
+def product_mask(img: np.ndarray) -> np.ndarray:
+    """Boolean mask, True on pixels judged to belong to the product.
+
+    Catalogue composition means the product sits against a plain light
+    background. Pixels that are NOT near-white are therefore taken as product.
+    A morphological close fills small gaps, for example specular highlights on a
+    glossy product that read as near-white.
+
+    Falls back to the central region when segmentation finds too little, which
+    protects against an unusual image producing an empty mask.
+    """
+    near_white = np.all(img >= config.T3_WHITE_THRESHOLD, axis=2)
+    prod = ~near_white
+
+    # Close small holes so highlights inside the product are not lost.
+    kernel = np.ones((7, 7), np.uint8)
+    prod = cv2.morphologyEx(prod.astype(np.uint8), cv2.MORPH_CLOSE, kernel).astype(bool)
+
+    # Guard. If the product occupies an implausibly small fraction of the frame,
+    # fall back to the central area rather than measuring almost nothing.
+    if prod.mean() < config.PRODUCT_MIN_FRACTION:
+        prod = _central_mask(img.shape, config.PRODUCT_FALLBACK_FRACTION)
+
+    return prod
+
+
+def _central_mask(shape, frac: float) -> np.ndarray:
+    """Boolean mask, True on a centred rectangle covering `frac` of each side."""
+    h, w = shape[:2]
+    ch, cw = int(h * frac), int(w * frac)
+    top, left = (h - ch) // 2, (w - cw) // 2
+    mask = np.zeros((h, w), dtype=bool)
+    mask[top:top + ch, left:left + cw] = True
+    return mask
+
+
+def product_bbox(img: np.ndarray) -> tuple[int, int, int, int]:
+    """Bounding box (top, left, height, width) of the product region.
+
+    Used where a criterion needs a rectangular crop rather than a mask, for
+    example a published metric that expects a normal image array.
+    """
+    mask = product_mask(img)
+    rows = np.any(mask, axis=1)
+    cols = np.any(mask, axis=0)
+    if not rows.any() or not cols.any():
+        h, w = img.shape[:2]
+        return 0, 0, h, w
+    top, bottom = np.where(rows)[0][[0, -1]]
+    left, right = np.where(cols)[0][[0, -1]]
+    # Small margin so the crop is not tight against the product edge.
+    h, w = img.shape[:2]
+    m = config.PRODUCT_CROP_MARGIN_PX
+    top = max(0, top - m)
+    left = max(0, left - m)
+    bottom = min(h - 1, bottom + m)
+    right = min(w - 1, right + m)
+    return int(top), int(left), int(bottom - top + 1), int(right - left + 1)
+
+
+def _clip01(x: float) -> float:
+    return float(max(0.0, min(1.0, x)))
+
+
+def _to_gray(img: np.ndarray) -> np.ndarray:
+    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+
+# ---------------------------------------------------------------------------
 # T1 — sharpness (Laplacian variance)
 # ---------------------------------------------------------------------------
 def t1_sharpness(img: np.ndarray) -> float:
-    gray = to_gray(img)
-    variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+    """Laplacian variance over the product region only.
+
+    Measuring the whole frame let a large flat background suppress the variance,
+    so a sharp product on white scored as though it were blurred.
+    """
+    gray = _to_gray(img)
+    lap = cv2.Laplacian(gray, cv2.CV_64F)
+    mask = product_mask(img)
+    vals = lap[mask]
+    if vals.size == 0:
+        vals = lap.ravel()
+    variance = float(vals.var())
     return _clip01(variance / config.CALIBRATED_SHARPNESS_SMAX)
 
 
@@ -42,8 +123,19 @@ def t1_sharpness(img: np.ndarray) -> float:
 # T2 — exposure (mean luminance distance from ideal band)
 # ---------------------------------------------------------------------------
 def t2_exposure(img: np.ndarray) -> float:
-    gray = to_gray(img)
-    mean = float(gray.mean())
+    """Mean luminance of the product region against the ideal band.
+
+    Measuring the whole frame meant a bright background pushed the mean past the
+    upper tolerance, so a correctly exposed product on white scored zero. What
+    matters is whether the PRODUCT is well exposed.
+    """
+    gray = _to_gray(img)
+    mask = product_mask(img)
+    vals = gray[mask]
+    if vals.size == 0:
+        vals = gray.ravel()
+    mean = float(vals.mean())
+
     if config.T2_IDEAL_LOW <= mean <= config.T2_IDEAL_HIGH:
         return 1.0
     dist = (config.T2_IDEAL_LOW - mean) if mean < config.T2_IDEAL_LOW else (mean - config.T2_IDEAL_HIGH)
@@ -91,12 +183,33 @@ def t4_brisque(img: np.ndarray) -> float:
 # T5 — PIQE (lower raw is better)
 # ---------------------------------------------------------------------------
 def t5_piqe(img: np.ndarray) -> float:
+    """PIQE on a crop of the product region.
+
+    PIQE penalises flat, low-texture blocks. A large uniform background is
+    exactly that, so whole-frame PIQE reported degradation that was not present
+    in the product. The published metric is not modified, it is simply given the
+    region that matters.
+    """
     try:
         import pypiqe
-        gray = to_gray(img)
-        raw = pypiqe.piqe(gray)[0] if isinstance(pypiqe.piqe(gray), tuple) else pypiqe.piqe(gray)
     except Exception:
         return 1.0
+
+    top, left, h, w = product_bbox(img)
+    crop = img[top:top + h, left:left + w]
+
+    # PIQE needs a workable block size. Fall back to the full image if the crop
+    # is too small to be meaningful.
+    if crop.shape[0] < config.PIQE_MIN_CROP_PX or crop.shape[1] < config.PIQE_MIN_CROP_PX:
+        crop = img
+
+    try:
+        gray = _to_gray(crop)
+        out = pypiqe.piqe(gray)
+        raw = out[0] if isinstance(out, tuple) else out
+    except Exception:
+        return 1.0
+
     return _clip01(1.0 - float(raw) / config.T5_PIQE_MAX)
 
 

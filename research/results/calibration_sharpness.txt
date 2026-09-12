@@ -1,0 +1,6 @@
+Sharpness calibration, separation based
+good images 29, degraded images 23
+good      min 55.0 median 1300.0 max 10474.8
+degraded  min 20.0 median 79.2 max 3686.9
+chosen CALIBRATED_SHARPNESS_SMAX = 1134.6
+separation quality 91%
