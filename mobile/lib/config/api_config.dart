@@ -1,0 +1,80 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
+/// Configuration for reaching the PQF API.
+///
+/// Settings come from a `.env` file that is not committed to the repository.
+///
+/// ROBUSTNESS NOTE. Every read goes through [_get], which tolerates dotenv not
+/// being initialised at all. This matters because if the `.env` asset is
+/// missing or malformed, `dotenv.load` fails, and any later call to
+/// `dotenv.maybeGet` throws NotInitializedError from deep inside a widget
+/// build, which surfaces as a crash rather than as a helpful message. A missing
+/// configuration file should degrade to a clear connection error, not take the
+/// app down.
+///
+/// A NOTE ON WHAT THIS DOES AND DOES NOT ACHIEVE. A value bundled into a mobile
+/// application can be extracted from the installed package, so this is not a way
+/// to hide a secret. What it gives you is configuration without editing source,
+/// which matters because the server address changes whenever you change network,
+/// and it keeps that address out of git history. The genuine secret, the model
+/// API key, stays on the server and is never shipped to the client.
+class ApiConfig {
+  /// True once a `.env` has been loaded successfully. Set from main().
+  static bool loaded = false;
+
+  /// Reads a key, returning null rather than throwing if dotenv is unavailable.
+  static String? _get(String key) {
+    if (!loaded) return null;
+    try {
+      if (!dotenv.isInitialized) return null;
+      final v = dotenv.maybeGet(key);
+      if (v == null || v.trim().isEmpty) return null;
+      return v.trim();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static int _int(String key, int fallback, int min, int max) {
+    final parsed = int.tryParse(_get(key) ?? '');
+    if (parsed == null) return fallback;
+    return parsed.clamp(min, max);
+  }
+
+  /// Where the API is running. Trailing slashes are stripped so joining paths
+  /// never produces a double slash.
+  static String get baseUrl {
+    final v = _get('PQF_API_BASE_URL');
+    if (v == null) {
+      debugPrint(
+        'PQF_API_BASE_URL not available. Either .env is missing, it is not '
+        'listed under assets in pubspec.yaml, or it failed to parse. Falling '
+        'back to the Android emulator host alias, which a physical phone '
+        'cannot reach.',
+      );
+      return 'https://29a0-2402-d000-8120-3dfe-fd25-2146-ec61-2452.ngrok-free.app';
+    }
+    return v.replaceAll(RegExp(r'/+$'), '');
+  }
+
+  /// How often a live guidance frame is sent. Raise if the preview stutters.
+  static Duration get guidanceInterval =>
+      Duration(milliseconds: _int('PQF_GUIDANCE_INTERVAL_MS', 700, 200, 3000));
+
+  /// Abandon a guidance frame after this long. A dropped frame is harmless.
+  static Duration get guidanceTimeout =>
+      Duration(milliseconds: _int('PQF_GUIDANCE_TIMEOUT_MS', 4000, 1000, 15000));
+
+  /// Batch scoring calls the semantic model once per image, so allow plenty.
+  static Duration get batchTimeout =>
+      Duration(milliseconds: _int('PQF_BATCH_TIMEOUT_MS', 180000, 30000, 600000));
+
+  /// Shown on the home screen so the configured target is visible at a glance.
+  static String get displayTarget {
+    final u = Uri.tryParse(baseUrl);
+    final where =
+        u == null ? baseUrl : '${u.host}${u.hasPort ? ':${u.port}' : ''}';
+    return loaded ? where : '$where  (no .env loaded)';
+  }
+}

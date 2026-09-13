@@ -19,10 +19,21 @@ venv/
 backend/api/secrets.py
 
 # Flutter
-mobile/
+
 mobile/.dart_tool/
 mobile/build/
 mobile/.flutter-plugins*
+mobile/.packages
+mobile/.flutter-plugins-dependencies
+mobile/.flutter-plugins
+mobile/android/
+mobile/ios/
+mobile/.idea/
+mobile/web/
+mobile/macOS/
+mobile/assets/
+mobile/linux/
+mobile/windows/
 
 # OS / editor
 .DS_Store
@@ -47,3 +58,18 @@ __pycache__/
 node_modules/
 
 diagnose_gemini.py
+
+# Flutter
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Configuration containing the server address. Never commit this.
+.env
+
+# IDE
+.idea/
+*.iml
+.vscode/

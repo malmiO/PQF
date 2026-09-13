@@ -25,6 +25,7 @@ import time
 from typing import List
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -262,7 +263,7 @@ def guidance(file: UploadFile = File(...)):
 
 
 @app.post("/batch", response_model=BatchResponse)
-def batch(files: List[UploadFile] = File(...)):
+def batch(files: List[UploadFile] = File(..., media_type="multipart/form-data")):
     """Score a capture batch, select the best set, and run the set level gate."""
     t0 = time.time()
     if not files:
@@ -288,3 +289,112 @@ def batch(files: List[UploadFile] = File(...)):
         certified=result.certified, selected=selected, role_sets=role_sets,
         recapture=result.recapture, elapsed_ms=int((time.time() - t0) * 1000),
     )
+
+# ---------------------------------------------------------------------------
+# Test page
+# ---------------------------------------------------------------------------
+_TEST_PAGE = """<!doctype html>
+<html><head><meta charset="utf-8"><title>PQF test</title>
+<style>
+ body{font-family:system-ui,Segoe UI,Arial;margin:0;background:#f5f7fa;color:#1f2430}
+ .wrap{max-width:860px;margin:0 auto;padding:28px 20px 60px}
+ h1{color:#1F3A63;margin:0 0 4px;font-size:24px}
+ p.sub{color:#5a6472;margin:0 0 26px}
+ .card{background:#fff;border:1px solid #dfe4ec;border-radius:12px;padding:20px;margin-bottom:18px}
+ h2{font-size:17px;margin:0 0 6px;color:#2E5090}
+ .hint{color:#6b7482;font-size:13.5px;margin:0 0 14px}
+ input[type=file]{display:block;margin:10px 0 14px;width:100%}
+ button{background:#1F3A63;color:#fff;border:0;border-radius:8px;padding:11px 20px;font-size:15px;cursor:pointer}
+ button:disabled{background:#9aa4b3;cursor:default}
+ pre{background:#0f1720;color:#d7e2f0;padding:14px;border-radius:8px;overflow:auto;font-size:12.5px;max-height:420px}
+ .verdict{padding:12px 14px;border-radius:8px;margin:12px 0;font-weight:600}
+ .ok{background:#EAF4EC;color:#1B5E20;border:1px solid #2E7D32}
+ .no{background:#FFF6E5;color:#7a5600;border:1px solid #B8860B}
+ .roles{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+ .role{background:#eef3fa;border:1px solid #cdd9ea;border-radius:8px;padding:8px 12px;font-size:13.5px}
+</style></head><body><div class="wrap">
+<h1>PQF test page</h1>
+<p class="sub">Swagger cannot render a multi file picker for this API, so use this instead.</p>
+
+<div class="card">
+  <h2>Single image</h2>
+  <p class="hint">Full framework evaluation. Costs one semantic model call.</p>
+  <input type="file" id="one" accept="image/*">
+  <button onclick="score()">Score this image</button>
+  <div id="oneOut"></div>
+</div>
+
+<div class="card">
+  <h2>Guidance only</h2>
+  <p class="hint">The fast pre capture check. No semantic call, so this is free.</p>
+  <input type="file" id="g" accept="image/*">
+  <button onclick="guide()">Check</button>
+  <div id="gOut"></div>
+</div>
+
+<div class="card">
+  <h2>Batch, the quality gate</h2>
+  <p class="hint">Select several images at once, hold Ctrl or Shift in the picker.
+  Each image costs one semantic call. Try four varied shots, then four near
+  identical close ups to see the gate fail.</p>
+  <input type="file" id="many" accept="image/*" multiple>
+  <button onclick="batch()">Score the set</button>
+  <div id="manyOut"></div>
+</div>
+</div>
+<script>
+async function post(url, form, outId, render){
+  const el = document.getElementById(outId);
+  el.innerHTML = '<p class="hint">Working...</p>';
+  try{
+    const r = await fetch(url, {method:'POST', body:form});
+    const j = await r.json();
+    el.innerHTML = (render ? render(j) : '') + '<pre>'+JSON.stringify(j,null,2)+'</pre>';
+  }catch(e){ el.innerHTML = '<pre>'+e+'</pre>'; }
+}
+function score(){
+  const f=document.getElementById('one').files[0]; if(!f) return;
+  const fd=new FormData(); fd.append('file',f);
+  post('/score',fd,'oneOut', j=>{
+    const cls = j.passed ? 'ok':'no';
+    return `<div class="verdict ${cls}">FQS ${j.fqs} &middot; role ${j.role} &middot; ${j.passed?'passed':'not passed'}</div>`;
+  });
+}
+function guide(){
+  const f=document.getElementById('g').files[0]; if(!f) return;
+  const fd=new FormData(); fd.append('file',f);
+  post('/guidance',fd,'gOut', j=>{
+    const cls = j.ready ? 'ok':'no';
+    const fb = j.feedback.length ? ' &middot; '+j.feedback[0] : '';
+    return `<div class="verdict ${cls}">${j.ready?'Ready':'Not ready'}${fb}</div>`;
+  });
+}
+function batch(){
+  const fs=document.getElementById('many').files; if(!fs.length) return;
+  const fd=new FormData(); for(const f of fs) fd.append('files',f);
+  post('/batch',fd,'manyOut', j=>{
+    const cls = j.certified ? 'ok':'no';
+    let head = j.certified ? 'Set certified' :
+      ('Not certified &middot; ' + (j.recapture?.instruction || ''));
+    let roles = '';
+    if(j.role_sets){
+      const bits = Object.entries(j.role_sets)
+        .filter(([k,v])=>v.length)
+        .map(([k,v])=>`<div class="role"><b>${k}</b><br>${v.length} image(s)</div>`);
+      if(bits.length) roles = '<div class="roles">'+bits.join('')+'</div>';
+    }
+    return `<div class="verdict ${cls}">${head}</div>`+roles;
+  });
+}
+</script></body></html>"""
+
+
+@app.get("/test", response_class=HTMLResponse)
+def test_page():
+    """A small page for exercising the endpoints, including multi file upload.
+
+    Swagger UI renders an OpenAPI 3.1 binary array as a text field rather than a
+    file picker, so the batch endpoint cannot be tested from /docs. This page
+    provides a working multi file picker and shows the verdict clearly.
+    """
+    return _TEST_PAGE
