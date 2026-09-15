@@ -59,7 +59,7 @@ class _IndicatorRow extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       children: checks
           .map((c) => Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
+                padding: const EdgeInsets.symmetric(horizontal: 7),
                 child: _Indicator(check: c, dimmed: waiting),
               ))
           .toList(),
@@ -86,8 +86,8 @@ class _Indicator extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 38,
-            height: 38,
+            width: 34,
+            height: 34,
             decoration: BoxDecoration(
               color: color,
               shape: BoxShape.circle,
@@ -95,7 +95,7 @@ class _Indicator extends StatelessWidget {
                 BoxShadow(color: Colors.black38, blurRadius: 6, offset: Offset(0, 2)),
               ],
             ),
-            child: Icon(icon, color: Colors.white, size: 22),
+            child: Icon(icon, color: Colors.white, size: 19),
           ),
           const SizedBox(height: 6),
           Text(

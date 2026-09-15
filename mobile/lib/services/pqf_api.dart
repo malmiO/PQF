@@ -40,6 +40,8 @@ class CriterionResult {
         return 'Light';
       case 'background':
         return 'Background';
+      case 'framing':
+        return 'Framing';
       default:
         return name;
     }

@@ -55,6 +55,13 @@ MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 GUIDANCE_LONGEST_SIDE = 512   # analysed size for live frames
 GUIDANCE_PASS_MIN = 0.40      # exposure and background pass mark
 GUIDANCE_SHARPNESS_MIN = 0.12 # lower than scoring, since variance falls with size
+
+# Framing proxy bounds. A product filling between roughly a tenth and two
+# thirds of the frame reads well in a catalogue listing. Outside that it is
+# either lost or cramped.
+GUIDANCE_MIN_PRODUCT_AREA = 0.10
+GUIDANCE_MAX_PRODUCT_AREA = 0.68
+GUIDANCE_CENTRE_TOLERANCE = 0.34
 # Declared content types we accept. octet-stream is included deliberately,
 # because several HTTP clients, including Flutter's, omit the type on a
 # multipart part and the transport defaults to octet-stream. Rejecting on the
@@ -189,6 +196,79 @@ def _shape(d: ImageDecision) -> tuple[list, list, list]:
     return technical, semantic, feedback
 
 
+def _framing_check(img, T) -> tuple[float, str]:
+    """Cheap composition check for live guidance.
+
+    Returns a score and, when it fails, the single most useful instruction.
+
+    Four faults are detected, in order of how badly they hurt the shot. The
+    product touching an edge, meaning it is cut off. The product occupying too
+    little of the frame, meaning the user is too far away. The product filling
+    almost everything, leaving no breathing room. The product sitting away from
+    centre.
+
+    The product region is computed here directly rather than through the
+    framework's product_mask, because that function falls back to a central
+    rectangle when it finds very little product, which is sensible for scoring
+    but would hide the very case this check exists to catch, a product that is
+    too small in the frame.
+
+    This is a guidance proxy, not a framework criterion. Composition is scored
+    properly by the semantic evaluator after capture.
+    """
+    import numpy as np
+    import cv2
+
+    try:
+        near_white = np.all(img >= config.T3_WHITE_THRESHOLD, axis=2)
+        mask = ~near_white
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(
+            mask.astype(np.uint8), cv2.MORPH_OPEN, kernel).astype(bool)
+    except Exception:
+        return 1.0, ""
+
+    h, w = mask.shape[:2]
+    area = float(mask.mean())
+
+    if area < 0.004:
+        return 0.0, "Point the camera at your product."
+
+    rows = np.any(mask, axis=1)
+    cols = np.any(mask, axis=0)
+    if not rows.any() or not cols.any():
+        return 0.0, "Point the camera at your product."
+    top, bottom = np.where(rows)[0][[0, -1]]
+    left, right = np.where(cols)[0][[0, -1]]
+
+    # Cut off. A small margin avoids flagging a product that merely sits close
+    # to the edge without crossing it.
+    m = max(2, int(min(h, w) * 0.02))
+    if top <= m or left <= m or bottom >= h - 1 - m or right >= w - 1 - m:
+        return 0.10, "Part of the product is cut off. Move back a little."
+
+    if area < GUIDANCE_MIN_PRODUCT_AREA:
+        return 0.15, "Move closer. The product is too small in the frame."
+
+    if area > GUIDANCE_MAX_PRODUCT_AREA:
+        return 0.25, "Move back slightly. Leave a little space around the product."
+
+    # Off centre, measured from the centroid of the product region as a
+    # fraction of half the frame.
+    ys, xs = np.nonzero(mask)
+    cx, cy = float(xs.mean()) / w, float(ys.mean()) / h
+    dx, dy = cx - 0.5, cy - 0.5
+    off = max(abs(dx), abs(dy)) * 2.0
+    if off > GUIDANCE_CENTRE_TOLERANCE:
+        if abs(dy) > abs(dx):
+            direction = "up" if dy > 0 else "down"
+        else:
+            direction = "left" if dx > 0 else "right"
+        return 0.30, f"Move the camera {direction} to centre the product."
+
+    return 1.0, ""
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -283,7 +363,24 @@ def guidance(file: UploadFile = File(...)):
                                      weight=config.TQS_WEIGHTS[name],
                                      passed=s >= thr))
 
-    feedback = [FEEDBACK[c.name] for c in checks if c.passed is False]
+    # Framing. Without this, a badly composed shot shows three green lights,
+    # because the other three criteria say nothing about where the product sits
+    # or how much of the frame it fills. Composition is scored properly by the
+    # semantic criterion after capture. This is a cheap deterministic proxy for
+    # live use only, computed from the same product region the technical
+    # criteria already use, so it introduces no new criterion to the framework.
+    framing_score, framing_msg = _framing_check(img, T)
+    checks.append(CriterionScore(name="framing", score=round(framing_score, 3),
+                                 weight=0.0,
+                                 passed=framing_score >= GUIDANCE_PASS_MIN))
+
+    feedback = []
+    for c in checks:
+        if c.passed is False:
+            if c.name == "framing" and framing_msg:
+                feedback.append(framing_msg)
+            elif c.name in FEEDBACK:
+                feedback.append(FEEDBACK[c.name])
     return GuidanceResponse(
         ready=all(c.passed for c in checks),
         checks=checks, feedback=feedback,

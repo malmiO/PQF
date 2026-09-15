@@ -40,6 +40,9 @@ dependencies:
   # Converting camera frames to JPEG for the guidance endpoint.
   image: ^4.1.7
 
+  # Selecting photos already on the phone, for the upload path.
+  image_picker: ^1.0.7
+
   # Saving the role tagged image set to the device.
   path_provider: ^2.1.2
 

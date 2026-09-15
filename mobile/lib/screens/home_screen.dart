@@ -2,9 +2,8 @@ import 'package:flutter/material.dart';
 import '../config/api_config.dart';
 import '../models/api_result.dart';
 import '../services/pqf_api.dart';
-import '../widgets/preflight_dialog.dart';
 import '../widgets/error_view.dart';
-import 'capture_screen.dart';
+import 'mode_screen.dart';
 
 /// Entry point. Kept deliberately short, because every screen before the camera
 /// is a screen between the seller and the thing they came to do.
@@ -100,17 +99,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           style: FilledButton.styleFrom(
                               minimumSize: const Size.fromHeight(52)),
                           onPressed: _serverUp == true
-                              ? () async {
-                                  // Setup advice before the camera opens.
-                                  // Preventing blur, clutter and bad light is
-                                  // far cheaper than correcting them shot by
-                                  // shot.
-                                  final ready =
-                                      await PreflightDialog.show(context);
-                                  if (!ready || !context.mounted) return;
+                              ? () {
                                   final name = _controller.text.trim();
                                   Navigator.of(context).push(MaterialPageRoute(
-                                    builder: (_) => CaptureScreen(
+                                    builder: (_) => ModeScreen(
                                       productName:
                                           name.isEmpty ? 'Product' : name,
                                     ),

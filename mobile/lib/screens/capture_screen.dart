@@ -77,6 +77,14 @@ class _CaptureScreenState extends State<CaptureScreen>
   String? _confirmation;
   Timer? _confirmationTimer;
 
+  /// Whether the briefing for the current shot is showing.
+  ///
+  /// The briefing explains the shot with the camera idle behind it, so the user
+  /// reads one thing at a time. Previously the instruction, its reason, four
+  /// indicators and a correction were all layered over the live preview, which
+  /// covered the very product the user was trying to frame.
+  bool _showBriefing = true;
+
   @override
   void initState() {
     super.initState();
@@ -127,7 +135,7 @@ class _CaptureScreenState extends State<CaptureScreen>
   }
 
   void _onFrame(CameraImage image) {
-    if (_checkInFlight || _scoring || _capturing) return;
+    if (_checkInFlight || _scoring || _capturing || _showBriefing) return;
     final now = DateTime.now();
     if (now.difference(_lastCheck) < ApiConfig.guidanceInterval) return;
 
@@ -270,9 +278,18 @@ class _CaptureScreenState extends State<CaptureScreen>
         _confirmation = ShotPlan.confirmation(_captured.length);
       });
 
+      // Brief confirmation over the preview, then the next shot's briefing.
       _confirmationTimer?.cancel();
-      _confirmationTimer = Timer(const Duration(milliseconds: 2600), () {
-        if (mounted) setState(() => _confirmation = null);
+      _confirmationTimer = Timer(const Duration(milliseconds: 1600), () {
+        if (!mounted) return;
+        setState(() {
+          _confirmation = null;
+          if (_step < ShotPlan.steps.length) {
+            _showBriefing = true;
+            _stableFrames = 0;
+            _guidance = GuidanceResult.empty();
+          }
+        });
       });
 
       if (mounted) await controller.startImageStream(_onFrame);
@@ -433,12 +450,13 @@ class _CaptureScreenState extends State<CaptureScreen>
                 const SizedBox(height: 8),
                 _ShotProgress(captured: done),
                 const Spacer(),
+                // A short reminder only. The full explanation was given on the
+                // briefing screen, so nothing large sits over the frame guide.
                 if (_confirmation != null)
                   _Confirmation(text: _confirmation!)
                 else
-                  _ShotInstruction(
-                      step: step, optional: ShotPlan.isOptional(_step)),
-                const SizedBox(height: 14),
+                  _ShotReminder(label: step.label),
+                const SizedBox(height: 12),
                 GuidanceOverlay(
                   guidance: _guidance,
                   waitingForServer: _checkInFlight,
@@ -459,6 +477,22 @@ class _CaptureScreenState extends State<CaptureScreen>
               ],
             ),
           ),
+          // Briefing sits above everything. The camera stays alive behind it so
+          // there is no delay when the user taps ready.
+          if (_showBriefing)
+            _Briefing(
+              step: step,
+              shotNumber: _step + 1,
+              total: ShotPlan.steps.length,
+              optional: ShotPlan.isOptional(_step),
+              canFinishInstead: canFinish,
+              onReady: () => setState(() {
+                _showBriefing = false;
+                _stableFrames = 0;
+              }),
+              onFinish: _finish,
+            ),
+
           if (_scoring)
             Container(
               color: Colors.black.withOpacity(0.72),
@@ -583,53 +617,142 @@ class _ShotProgress extends StatelessWidget {
   }
 }
 
-class _ShotInstruction extends StatelessWidget {
-  final ShotStep step;
-  final bool optional;
+/// A slim reminder of which shot is being taken.
+///
+/// The full explanation lives on the briefing screen, so this stays small and
+/// out of the way of the frame guide.
+class _ShotReminder extends StatelessWidget {
+  final String label;
 
-  const _ShotInstruction({required this.step, required this.optional});
+  const _ShotReminder({required this.label});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.72),
+        color: Colors.black.withOpacity(0.5),
         borderRadius: BorderRadius.circular(14),
       ),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Text(
-          optional
-              ? 'Optional'
-              : 'Now take the ${step.label.toLowerCase()} shot',
-          style: TextStyle(
-            color: Colors.white.withOpacity(0.85),
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.4,
+      child: Text(
+        'Taking the ${label.toLowerCase()} shot',
+        style: const TextStyle(
+            color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+      ),
+    );
+  }
+}
+
+/// Full screen briefing shown before each shot.
+///
+/// One thing at a time. The user reads what to do with the camera idle, rather
+/// than reading an instruction laid over the product they are trying to frame.
+class _Briefing extends StatelessWidget {
+  final ShotStep step;
+  final int shotNumber;
+  final int total;
+  final bool optional;
+  final bool canFinishInstead;
+  final VoidCallback onReady;
+  final VoidCallback onFinish;
+
+  const _Briefing({
+    required this.step,
+    required this.shotNumber,
+    required this.total,
+    required this.optional,
+    required this.canFinishInstead,
+    required this.onReady,
+    required this.onFinish,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFF12161C).withOpacity(0.96),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(26, 20, 26, 26),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                optional ? 'Optional extra shot' : 'Shot $shotNumber of $total',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.6),
+                  fontSize: 13,
+                  letterSpacing: 0.6,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                step.label,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 30,
+                    fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 26),
+              Text(
+                step.instruction,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 19, height: 1.45),
+              ),
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.07),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.lightbulb_outline,
+                        color: Colors.amber.shade300, size: 19),
+                    const SizedBox(width: 11),
+                    Expanded(
+                      child: Text(
+                        step.why,
+                        style: TextStyle(
+                            color: Colors.white.withOpacity(0.85),
+                            fontSize: 14.5,
+                            height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Spacer(),
+              Text(
+                'When you tap ready, the camera will check the shot and tell '
+                'you what to fix.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: Colors.white.withOpacity(0.55),
+                    fontSize: 13,
+                    height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52)),
+                onPressed: onReady,
+                child: const Text('I am ready'),
+              ),
+              if (canFinishInstead) ...[
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: onFinish,
+                  child: Text('Finish and check my photos',
+                      style: TextStyle(color: Colors.white.withOpacity(0.8))),
+                ),
+              ],
+            ],
           ),
         ),
-        const SizedBox(height: 6),
-        Text(
-          step.instruction,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 15.5,
-              fontWeight: FontWeight.w600,
-              height: 1.3),
-        ),
-        const SizedBox(height: 5),
-        Text(
-          step.why,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-              color: Colors.white.withOpacity(0.78),
-              fontSize: 12.5,
-              height: 1.3),
-        ),
-      ]),
+      ),
     );
   }
 }
