@@ -188,32 +188,74 @@ class FramingGuide extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      child: Center(
+      // Positioned in the UPPER portion of the preview rather than centred.
+      // The instruction and guidance panels occupy the lower half, and a
+      // centred box put them directly over the product, hiding exactly what
+      // the user needs to see while framing it.
+      child: Align(
+        alignment: const Alignment(0, -0.42),
         child: FractionallySizedBox(
-          widthFactor: 0.72,
-          heightFactor: 0.52,
-          child: Container(
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.white.withOpacity(0.75), width: 2),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Fill this box with your product',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.9),
-                    fontSize: 12,
-                    shadows: const [Shadow(color: Colors.black87, blurRadius: 4)],
+          widthFactor: 0.68,
+          heightFactor: 0.34,
+          child: Stack(
+            children: [
+              // Corner marks rather than a full rectangle. A closed box reads
+              // as a boundary the product must not cross. Corners suggest the
+              // area to fill without hiding the edges of the product itself.
+              Positioned.fill(
+                child: CustomPaint(painter: _CornerPainter()),
+              ),
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(
+                    'Fill this area with your product',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.92),
+                      fontSize: 11.5,
+                      shadows: const [
+                        Shadow(color: Colors.black87, blurRadius: 5)
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
+            ],
           ),
         ),
       ),
     );
   }
+}
+
+class _CornerPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white.withOpacity(0.85)
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    final len = size.width * 0.14;
+
+    // top left
+    canvas.drawLine(const Offset(0, 0), Offset(len, 0), paint);
+    canvas.drawLine(const Offset(0, 0), Offset(0, len), paint);
+    // top right
+    canvas.drawLine(Offset(size.width, 0), Offset(size.width - len, 0), paint);
+    canvas.drawLine(Offset(size.width, 0), Offset(size.width, len), paint);
+    // bottom left
+    canvas.drawLine(Offset(0, size.height), Offset(len, size.height), paint);
+    canvas.drawLine(Offset(0, size.height), Offset(0, size.height - len), paint);
+    // bottom right
+    canvas.drawLine(Offset(size.width, size.height),
+        Offset(size.width - len, size.height), paint);
+    canvas.drawLine(Offset(size.width, size.height),
+        Offset(size.width, size.height - len), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

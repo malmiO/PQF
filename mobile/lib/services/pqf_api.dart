@@ -2,8 +2,12 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
+import 'dart:io';
+
 import '../config/api_config.dart';
+import '../models/api_result.dart';
 export '../config/api_config.dart';
+export '../models/api_result.dart';
 
 /// One criterion, as returned by the API.
 class CriterionResult {
@@ -146,62 +150,104 @@ class BatchResult {
 }
 
 /// Client for the PQF API.
+///
+/// Every method returns an [ApiResult] rather than throwing, so a caller never
+/// has to interpret an exception, and the user never sees one.
 class PqfApi {
   final http.Client _client = http.Client();
 
+  /// Turns any thrown object into a classified, user readable failure.
+  ApiFailure _classify(Object e) {
+    final text = e.toString();
+    if (e is SocketException || text.contains('SocketException') ||
+        text.contains('Connection refused') || text.contains('Failed host lookup')) {
+      return ApiFailure.unreachable(text);
+    }
+    if (e is HttpException) return ApiFailure.server(0, text);
+    if (text.contains('TimeoutException') || text.contains('timed out')) {
+      return ApiFailure.timeout(text);
+    }
+    return ApiFailure.unknown(text);
+  }
+
+  /// Reads a failing response body and works out what actually went wrong.
+  /// A quota failure is worth distinguishing, because retrying is pointless and
+  /// telling the user to wait until tomorrow is more useful than "try again".
+  ApiFailure _fromResponse(int status, String body) {
+    final lower = body.toLowerCase();
+    if (status == 429 || lower.contains('resource_exhausted') ||
+        lower.contains('quota')) {
+      return ApiFailure.quota(body);
+    }
+    if (status == 400 || status == 415 || status == 422) {
+      return ApiFailure.badImage(body);
+    }
+    return ApiFailure.server(status, body);
+  }
+
   /// Fast pre capture check. No semantic model call, so this is free and quick.
-  /// Returns null on any failure, because a dropped guidance frame should never
-  /// interrupt the camera.
-  Future<GuidanceResult?> guidance(Uint8List jpegBytes) async {
+  ///
+  /// A dropped guidance frame is not an error worth reporting. The camera must
+  /// keep working, so failures here are returned quietly and the caller simply
+  /// keeps the previous reading.
+  Future<ApiResult<GuidanceResult>> guidance(Uint8List jpegBytes) async {
     try {
       final req = http.MultipartRequest(
         'POST',
         Uri.parse('${ApiConfig.baseUrl}/guidance'),
-      )..files.add(http.MultipartFile.fromBytes(
-          'file',
-          jpegBytes,
-          filename: 'frame.jpg',
-        ));
+      )..files.add(http.MultipartFile.fromBytes('file', jpegBytes,
+          filename: 'frame.jpg'));
 
       final streamed = await req.send().timeout(ApiConfig.guidanceTimeout);
-      if (streamed.statusCode != 200) return null;
       final body = await streamed.stream.bytesToString();
-      return GuidanceResult.fromJson(jsonDecode(body) as Map<String, dynamic>);
-    } catch (_) {
-      return null;
+      if (streamed.statusCode != 200) {
+        return ApiResult.failure(_fromResponse(streamed.statusCode, body));
+      }
+      return ApiResult.success(
+          GuidanceResult.fromJson(jsonDecode(body) as Map<String, dynamic>));
+    } catch (e) {
+      return ApiResult.failure(_classify(e));
     }
   }
 
   /// Score a whole capture batch, select the best set, and run the quality gate.
-  Future<BatchResult> batch(List<Uint8List> images) async {
-    final req = http.MultipartRequest(
-      'POST',
-      Uri.parse('${ApiConfig.baseUrl}/batch'),
-    );
-    for (var i = 0; i < images.length; i++) {
-      req.files.add(http.MultipartFile.fromBytes(
-        'files',
-        images[i],
-        filename: 'capture_$i.jpg',
-      ));
+  Future<ApiResult<BatchResult>> batch(List<Uint8List> images) async {
+    if (images.isEmpty) {
+      return ApiResult.failure(ApiFailure.badImage('No images to send.'));
     }
-    final streamed = await req.send().timeout(ApiConfig.batchTimeout);
-    final body = await streamed.stream.bytesToString();
-    if (streamed.statusCode != 200) {
-      throw Exception('Scoring failed (${streamed.statusCode}). $body');
+    try {
+      final req = http.MultipartRequest(
+        'POST',
+        Uri.parse('${ApiConfig.baseUrl}/batch'),
+      );
+      for (var i = 0; i < images.length; i++) {
+        req.files.add(http.MultipartFile.fromBytes('files', images[i],
+            filename: 'capture_$i.jpg'));
+      }
+      final streamed = await req.send().timeout(ApiConfig.batchTimeout);
+      final body = await streamed.stream.bytesToString();
+      if (streamed.statusCode != 200) {
+        return ApiResult.failure(_fromResponse(streamed.statusCode, body));
+      }
+      return ApiResult.success(
+          BatchResult.fromJson(jsonDecode(body) as Map<String, dynamic>));
+    } catch (e) {
+      return ApiResult.failure(_classify(e));
     }
-    return BatchResult.fromJson(jsonDecode(body) as Map<String, dynamic>);
   }
 
   /// Confirms the server is reachable before the user starts capturing.
-  Future<bool> health() async {
+  Future<ApiResult<bool>> health() async {
     try {
       final r = await _client
           .get(Uri.parse('${ApiConfig.baseUrl}/health'))
           .timeout(const Duration(seconds: 6));
-      return r.statusCode == 200;
-    } catch (_) {
-      return false;
+      if (r.statusCode != 200) {
+        return ApiResult.failure(_fromResponse(r.statusCode, r.body));
+      }
+      return const ApiResult.success(true);
+    } catch (e) {
+      return ApiResult.failure(_classify(e));
     }
   }
 }

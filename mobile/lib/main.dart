@@ -9,7 +9,7 @@ Future<void> main() async {
   // because ApiConfig falls back to a default and the home screen will then
   // show a clear connection error rather than crashing on startup.
   try {
-    await dotenv.load(fileName: '.env');
+    await dotenv.load(fileName: 'assets/config.env');
     ApiConfig.loaded = true;
   } catch (e) {
     // Not fatal. ApiConfig falls back to defaults and the home screen shows a
@@ -34,9 +34,13 @@ class PqfApp extends StatelessWidget {
           seedColor: const Color(0xFF1F3A63),
           brightness: Brightness.light,
         ),
+        // NOTE. Do not set minimumSize here. Size.fromHeight is shorthand for
+        // infinite width, which is fine inside a stretched Column but is an
+        // illegal constraint inside a Row, and it crashes layout wherever a
+        // button sits in a row. Height is set per button instead.
         filledButtonTheme: FilledButtonThemeData(
           style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(52),
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14)),
             textStyle:

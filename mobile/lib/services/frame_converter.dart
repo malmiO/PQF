@@ -2,81 +2,112 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
 
-/// Converts a camera stream frame into JPEG bytes for the guidance endpoint.
+/// Converts a camera frame into JPEG bytes for the guidance endpoint.
 ///
-/// PERFORMANCE NOTE, and the most likely thing to need tuning on your device.
-/// The camera delivers frames in a platform specific format, YUV420 on Android
-/// and BGRA8888 on iOS, and converting them in Dart is not free. The conversion
-/// is therefore done at a reduced size and only on throttled frames, never on
-/// every frame. If guidance feels sluggish on your handset, reduce
-/// `targetWidth` before changing anything else.
+/// PERFORMANCE, AND WHY THIS IS WRITTEN THE WAY IT IS.
 ///
-/// This runs on a background isolate via `compute` in the capture screen, so it
-/// does not block the camera preview.
+/// The obvious implementation converts every source pixel and then resizes.
+/// On a 1280 by 720 preview that is 921,600 pixels, each needing several
+/// floating point operations, in pure Dart. It takes seconds per frame, the
+/// guidance request never returns, and the camera appears to hang. That is
+/// exactly what happened in the first version of this file.
+///
+/// This version samples DIRECTLY at the target size. For a 320 pixel wide
+/// target from a 1280 by 720 source that is 57,600 pixels rather than 921,600,
+/// which is sixteen times less work. Nearest neighbour sampling is perfectly
+/// adequate here, because the result is fed to coarse quality checks and then
+/// discarded, never shown to anyone.
 class FrameConverter {
-  /// Width the frame is reduced to before encoding. The API reduces further,
-  /// so there is no benefit in sending anything large.
-  static const int targetWidth = 480;
+  /// Target width for the guidance frame. The server reduces further, so there
+  /// is nothing to gain from sending anything larger. Lower this first if the
+  /// preview stutters.
+  static const int targetWidth = 320;
 
-  /// JPEG quality for guidance frames. Low is fine, since the guidance criteria
-  /// are tolerant and the frame is discarded immediately.
-  static const int jpegQuality = 70;
+  /// JPEG quality. Low is fine for a frame that is measured and thrown away.
+  static const int jpegQuality = 65;
 
-  /// Entry point for `compute`. Takes a simplified payload because isolates
-  /// cannot receive a CameraImage directly.
   static Uint8List convert(FramePayload p) {
-    final image = p.isYuv ? _fromYuv420(p) : _fromBgra(p);
-    final resized = img.copyResize(
-      image,
-      width: targetWidth,
-      interpolation: img.Interpolation.average,
-    );
-    return Uint8List.fromList(img.encodeJpg(resized, quality: jpegQuality));
+    final image = p.isYuv ? _sampleYuv420(p) : _sampleBgra(p);
+    return Uint8List.fromList(img.encodeJpg(image, quality: jpegQuality));
   }
 
-  static img.Image _fromYuv420(FramePayload p) {
-    final out = img.Image(width: p.width, height: p.height);
-    final uvRowStride = p.uvRowStride!;
-    final uvPixelStride = p.uvPixelStride!;
+  /// Samples a YUV420 frame straight into an RGB image at the target size.
+  static img.Image _sampleYuv420(FramePayload p) {
+    final tw = p.width < targetWidth ? p.width : targetWidth;
+    final th = (p.height * tw / p.width).round().clamp(1, p.height);
 
-    for (var y = 0; y < p.height; y++) {
-      for (var x = 0; x < p.width; x++) {
-        final uvIndex =
-            uvPixelStride * (x >> 1) + uvRowStride * (y >> 1);
-        final yIndex = y * p.yRowStride! + x;
+    final out = img.Image(width: tw, height: th);
+    final yRow = p.yRowStride!;
+    final uvRow = p.uvRowStride!;
+    final uvPix = p.uvPixelStride!;
+    final yPlane = p.planeY;
+    final uPlane = p.planeU!;
+    final vPlane = p.planeV!;
+    final yLen = yPlane.length;
+    final uLen = uPlane.length;
+    final vLen = vPlane.length;
 
-        final yv = p.planeY[yIndex];
-        final uv = p.planeU![uvIndex];
-        final vv = p.planeV![uvIndex];
+    for (var ty = 0; ty < th; ty++) {
+      final sy = ty * p.height ~/ th;
+      final yBase = sy * yRow;
+      final uvBase = (sy >> 1) * uvRow;
 
-        // Standard YUV to RGB conversion.
-        var r = (yv + 1.402 * (vv - 128)).round();
-        var g = (yv - 0.344136 * (uv - 128) - 0.714136 * (vv - 128)).round();
-        var b = (yv + 1.772 * (uv - 128)).round();
+      for (var tx = 0; tx < tw; tx++) {
+        final sx = tx * p.width ~/ tw;
 
-        out.setPixelRgb(
-          x,
-          y,
-          r.clamp(0, 255),
-          g.clamp(0, 255),
-          b.clamp(0, 255),
-        );
+        final yIdx = yBase + sx;
+        final uvIdx = uvBase + (sx >> 1) * uvPix;
+
+        // Guard rather than assume. Stride and plane sizes vary by device, and
+        // a single out of range read would crash the isolate mid frame.
+        if (yIdx >= yLen || uvIdx >= uLen || uvIdx >= vLen) continue;
+
+        final yv = yPlane[yIdx];
+        final uv = uPlane[uvIdx] - 128;
+        final vv = vPlane[uvIdx] - 128;
+
+        var r = (yv + 1.402 * vv).round();
+        var g = (yv - 0.344136 * uv - 0.714136 * vv).round();
+        var b = (yv + 1.772 * uv).round();
+
+        if (r < 0) r = 0; else if (r > 255) r = 255;
+        if (g < 0) g = 0; else if (g > 255) g = 255;
+        if (b < 0) b = 0; else if (b > 255) b = 255;
+
+        out.setPixelRgb(tx, ty, r, g, b);
       }
     }
     return out;
   }
 
-  static img.Image _fromBgra(FramePayload p) {
-    return img.Image.fromBytes(
-      width: p.width,
-      height: p.height,
-      bytes: p.planeY.buffer,
-      order: img.ChannelOrder.bgra,
-    );
+  /// Samples a BGRA frame, which is what iOS delivers.
+  static img.Image _sampleBgra(FramePayload p) {
+    final tw = p.width < targetWidth ? p.width : targetWidth;
+    final th = (p.height * tw / p.width).round().clamp(1, p.height);
+
+    final out = img.Image(width: tw, height: th);
+    final bytes = p.planeY;
+    final rowStride = p.yRowStride ?? (p.width * 4);
+    final len = bytes.length;
+
+    for (var ty = 0; ty < th; ty++) {
+      final sy = ty * p.height ~/ th;
+      final base = sy * rowStride;
+      for (var tx = 0; tx < tw; tx++) {
+        final sx = tx * p.width ~/ tw;
+        final i = base + sx * 4;
+        if (i + 2 >= len) continue;
+        out.setPixelRgb(tx, ty, bytes[i + 2], bytes[i + 1], bytes[i]);
+      }
+    }
+    return out;
   }
 }
 
 /// Isolate safe payload extracted from a CameraImage.
+///
+/// A CameraImage cannot cross an isolate boundary, so the plane bytes and the
+/// stride values are copied out first.
 class FramePayload {
   final int width;
   final int height;
@@ -101,7 +132,8 @@ class FramePayload {
   });
 
   factory FramePayload.fromCameraImage(CameraImage image) {
-    final isYuv = image.format.group == ImageFormatGroup.yuv420;
+    final isYuv = image.format.group == ImageFormatGroup.yuv420 &&
+        image.planes.length >= 3;
     return FramePayload(
       width: image.width,
       height: image.height,
@@ -109,9 +141,9 @@ class FramePayload {
       planeY: image.planes[0].bytes,
       planeU: isYuv ? image.planes[1].bytes : null,
       planeV: isYuv ? image.planes[2].bytes : null,
-      yRowStride: isYuv ? image.planes[0].bytesPerRow : null,
+      yRowStride: image.planes[0].bytesPerRow,
       uvRowStride: isYuv ? image.planes[1].bytesPerRow : null,
-      uvPixelStride: isYuv ? image.planes[1].bytesPerPixel : null,
+      uvPixelStride: isYuv ? (image.planes[1].bytesPerPixel ?? 1) : null,
     );
   }
 }

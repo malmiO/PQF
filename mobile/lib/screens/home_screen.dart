@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import '../config/api_config.dart';
+import '../models/api_result.dart';
 import '../services/pqf_api.dart';
+import '../widgets/preflight_dialog.dart';
+import '../widgets/error_view.dart';
 import 'capture_screen.dart';
 
 /// Entry point. Kept deliberately short, because every screen before the camera
@@ -16,6 +19,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _controller = TextEditingController();
   final _api = PqfApi();
   bool? _serverUp;
+  ApiFailure? _failure;
   bool _checking = true;
 
   @override
@@ -26,8 +30,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _checkServer() async {
     setState(() => _checking = true);
-    final ok = await _api.health();
-    if (mounted) setState(() { _serverUp = ok; _checking = false; });
+    final result = await _api.health();
+    if (!mounted) return;
+    setState(() {
+      _serverUp = result.ok;
+      _failure = result.failure;
+      _checking = false;
+    });
   }
 
   @override
@@ -82,12 +91,23 @@ class _HomeScreenState extends State<HomeScreen> {
                         _ServerStatus(
                           checking: _checking,
                           up: _serverUp,
+                          failure: _failure,
                           onRetry: _checkServer,
                         ),
                         const Expanded(child: SizedBox(height: 24)),
                         FilledButton(
+                          // Full width here specifically, rather than globally.
+                          style: FilledButton.styleFrom(
+                              minimumSize: const Size.fromHeight(52)),
                           onPressed: _serverUp == true
-                              ? () {
+                              ? () async {
+                                  // Setup advice before the camera opens.
+                                  // Preventing blur, clutter and bad light is
+                                  // far cheaper than correcting them shot by
+                                  // shot.
+                                  final ready =
+                                      await PreflightDialog.show(context);
+                                  if (!ready || !context.mounted) return;
                                   final name = _controller.text.trim();
                                   Navigator.of(context).push(MaterialPageRoute(
                                     builder: (_) => CaptureScreen(
@@ -126,55 +146,73 @@ class _HomeScreenState extends State<HomeScreen> {
 class _ServerStatus extends StatelessWidget {
   final bool checking;
   final bool? up;
+  final ApiFailure? failure;
   final VoidCallback onRetry;
 
-  const _ServerStatus({required this.checking, required this.up, required this.onRetry});
+  const _ServerStatus({
+    required this.checking,
+    required this.up,
+    required this.failure,
+    required this.onRetry,
+  });
 
   @override
   Widget build(BuildContext context) {
     if (checking) {
       return Row(children: const [
-        SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+        SizedBox(
+            width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
         SizedBox(width: 12),
         Text('Connecting'),
       ]);
     }
-    final ok = up == true;
-    return Container(
-      padding: const EdgeInsets.all(13),
-      decoration: BoxDecoration(
-        color: ok ? const Color(0xFFEAF4EC) : const Color(0xFFFDECEA),
-        borderRadius: BorderRadius.circular(11),
-      ),
-      child: Row(children: [
-        Icon(ok ? Icons.check_circle : Icons.error_outline,
-            color: ok ? const Color(0xFF2E7D32) : const Color(0xFFC62828), size: 20),
-        const SizedBox(width: 11),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                ok
-                    ? 'Connected and ready'
-                    : 'Cannot reach the scoring service. Check that the server '
-                      'is running and that the address below is correct.',
-                style: const TextStyle(fontSize: 13.5, height: 1.35),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                ApiConfig.displayTarget,
-                style: TextStyle(
-                    fontSize: 11.5,
-                    color: Colors.grey.shade600,
-                    fontFamily: 'monospace'),
-              ),
-            ],
-          ),
+
+    if (up == true) {
+      return Container(
+        padding: const EdgeInsets.all(13),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEAF4EC),
+          borderRadius: BorderRadius.circular(11),
         ),
-        if (!ok)
-          TextButton(onPressed: onRetry, child: const Text('Retry')),
-      ]),
+        child: Row(children: [
+          const Icon(Icons.check_circle, color: Color(0xFF2E7D32), size: 20),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Connected and ready',
+                    style: TextStyle(fontSize: 13.5)),
+                const SizedBox(height: 3),
+                Text(ApiConfig.displayTarget,
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        color: Colors.grey.shade600,
+                        fontFamily: 'monospace')),
+              ],
+            ),
+          ),
+        ]),
+      );
+    }
+
+    // Not connected. Show the classified failure, which explains what went
+    // wrong and what to do, rather than a generic message.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ErrorView(
+          failure: failure ??
+              ApiFailure.unreachable('No detail available.'),
+          onRetry: onRetry,
+        ),
+        const SizedBox(height: 6),
+        Text('Trying to reach  ${ApiConfig.displayTarget}',
+            style: TextStyle(
+                fontSize: 11.5,
+                color: Colors.grey.shade600,
+                fontFamily: 'monospace')),
+      ],
     );
   }
 }

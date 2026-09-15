@@ -48,12 +48,13 @@ class ApiConfig {
     final v = _get('PQF_API_BASE_URL');
     if (v == null) {
       debugPrint(
-        'PQF_API_BASE_URL not available. Either .env is missing, it is not '
-        'listed under assets in pubspec.yaml, or it failed to parse. Falling '
+        'PQF_API_BASE_URL not available. Check that assets/config.env exists, '
+        'that it is listed under assets in pubspec.yaml, and that you ran '
+        'flutter clean after adding it. Falling '
         'back to the Android emulator host alias, which a physical phone '
         'cannot reach.',
       );
-      return 'https://29a0-2402-d000-8120-3dfe-fd25-2146-ec61-2452.ngrok-free.app';
+      return 'http://10.0.2.2:8000';
     }
     return v.replaceAll(RegExp(r'/+$'), '');
   }
@@ -75,6 +76,6 @@ class ApiConfig {
     final u = Uri.tryParse(baseUrl);
     final where =
         u == null ? baseUrl : '${u.host}${u.hasPort ? ':${u.port}' : ''}';
-    return loaded ? where : '$where  (no .env loaded)';
+    return loaded ? where : '$where  (no config loaded)';
   }
 }
