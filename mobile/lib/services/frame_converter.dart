@@ -18,10 +18,15 @@ import 'package:image/image.dart' as img;
 /// adequate here, because the result is fed to coarse quality checks and then
 /// discarded, never shown to anyone.
 class FrameConverter {
-  /// Target width for the guidance frame. The server reduces further, so there
-  /// is nothing to gain from sending anything larger. Lower this first if the
-  /// preview stutters.
-  static const int targetWidth = 320;
+  /// Target width for the guidance frame.
+  ///
+  /// Kept small deliberately. This conversion runs on the main isolate, so every
+  /// pixel costs interface smoothness. At 224 wide a 1280 by 720 frame becomes
+  /// about 28,000 pixels rather than 921,600, which is roughly thirty times less
+  /// work. The server reduces further before measuring, and the guidance
+  /// criteria are coarse, so nothing useful is lost. Lower this first if the
+  /// preview still stutters.
+  static const int targetWidth = 224;
 
   /// JPEG quality. Low is fine for a frame that is measured and thrown away.
   static const int jpegQuality = 65;

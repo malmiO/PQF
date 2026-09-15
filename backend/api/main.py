@@ -55,7 +55,15 @@ MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 GUIDANCE_LONGEST_SIDE = 512   # analysed size for live frames
 GUIDANCE_PASS_MIN = 0.40      # exposure and background pass mark
 GUIDANCE_SHARPNESS_MIN = 0.12 # lower than scoring, since variance falls with size
-ALLOWED_MIME = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
+# Declared content types we accept. octet-stream is included deliberately,
+# because several HTTP clients, including Flutter's, omit the type on a
+# multipart part and the transport defaults to octet-stream. Rejecting on the
+# DECLARED type alone is unreliable, so the bytes are decoded and validated
+# instead, which is the check that actually matters.
+ALLOWED_MIME = {
+    "image/jpeg", "image/jpg", "image/png", "image/webp",
+    "application/octet-stream", None, "",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -123,13 +131,34 @@ FEEDBACK = {
 
 
 def _read_upload(f: UploadFile) -> bytes:
-    if f.content_type not in ALLOWED_MIME:
-        raise HTTPException(415, f"Unsupported type {f.content_type}. Send JPEG, PNG or WebP.")
+    """Read and validate an uploaded image.
+
+    Validation is by magic bytes rather than by the declared content type,
+    because clients frequently omit the type and the transport substitutes
+    application/octet-stream. What matters is whether the bytes are a decodable
+    image, not what the client claimed.
+    """
+    if f.content_type and f.content_type not in ALLOWED_MIME:
+        raise HTTPException(
+            415, f"Unsupported type {f.content_type}. Send JPEG, PNG or WebP.")
+
     data = f.file.read()
     if not data:
         raise HTTPException(400, "Empty file.")
     if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, f"File too large. Limit is {MAX_UPLOAD_BYTES // (1024*1024)} MB.")
+        raise HTTPException(
+            413, f"File too large. Limit is {MAX_UPLOAD_BYTES // (1024*1024)} MB.")
+
+    # Magic byte check. JPEG starts FF D8, PNG starts 89 50 4E 47,
+    # WebP is RIFF....WEBP.
+    head = data[:12]
+    is_jpeg = head[:2] == b"\xff\xd8"
+    is_png = head[:4] == b"\x89PNG"
+    is_webp = head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    if not (is_jpeg or is_png or is_webp):
+        raise HTTPException(
+            415, "That file is not a readable JPEG, PNG or WebP image.")
+
     return data
 
 

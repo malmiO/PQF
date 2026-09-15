@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import 'dart:io';
 
@@ -195,8 +196,14 @@ class PqfApi {
       final req = http.MultipartRequest(
         'POST',
         Uri.parse('${ApiConfig.baseUrl}/guidance'),
-      )..files.add(http.MultipartFile.fromBytes('file', jpegBytes,
-          filename: 'frame.jpg'));
+      )..files.add(http.MultipartFile.fromBytes(
+          'file',
+          jpegBytes,
+          filename: 'frame.jpg',
+          // Without this the part is sent as application/octet-stream, which a
+          // server that validates the declared type will reject.
+          contentType: MediaType('image', 'jpeg'),
+        ));
 
       final streamed = await req.send().timeout(ApiConfig.guidanceTimeout);
       final body = await streamed.stream.bytesToString();
@@ -221,8 +228,12 @@ class PqfApi {
         Uri.parse('${ApiConfig.baseUrl}/batch'),
       );
       for (var i = 0; i < images.length; i++) {
-        req.files.add(http.MultipartFile.fromBytes('files', images[i],
-            filename: 'capture_$i.jpg'));
+        req.files.add(http.MultipartFile.fromBytes(
+          'files',
+          images[i],
+          filename: 'capture_$i.jpg',
+          contentType: MediaType('image', 'jpeg'),
+        ));
       }
       final streamed = await req.send().timeout(ApiConfig.batchTimeout);
       final body = await streamed.stream.bytesToString();

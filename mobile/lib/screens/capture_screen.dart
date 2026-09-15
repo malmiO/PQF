@@ -44,6 +44,10 @@ class _CaptureScreenState extends State<CaptureScreen>
   bool _checkInFlight = false;
   DateTime _lastCheck = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// Prints timing and scores for every guidance check. Leave on until the
+  /// loop is confirmed working on a real device, then turn off.
+  static const bool _diagnostics = true;
+
   /// Releases the in flight guard if a check never completes. Without this, one
   /// hung conversion or request freezes guidance permanently, which is exactly
   /// what happened before the converter was made cheap enough to finish.
@@ -141,14 +145,52 @@ class _CaptureScreenState extends State<CaptureScreen>
       }
     });
 
-    compute(FrameConverter.convert, FramePayload.fromCameraImage(image))
-        .then((jpeg) => _api.guidance(jpeg))
-        .then(_applyGuidance)
-        .catchError((Object e) => debugPrint('Guidance frame failed. $e'))
-        .whenComplete(() {
+    _runGuidanceCheck(image);
+  }
+
+  /// Converts the frame and asks the server to check it.
+  ///
+  /// The conversion runs on the main isolate deliberately. The obvious choice is
+  /// compute(), but that spawns a fresh isolate per frame and copies the whole
+  /// camera planes across the boundary, which on a modest handset costs far more
+  /// than the conversion itself. The device log showed continuous garbage
+  /// collection of twenty to thirty megabyte objects and hundreds of skipped
+  /// frames. Sampling directly at a small target size is cheap enough to do
+  /// inline, so no isolate is needed at all.
+  Future<void> _runGuidanceCheck(CameraImage image) async {
+    final started = DateTime.now();
+    try {
+      final payload = FramePayload.fromCameraImage(image);
+      final jpeg = FrameConverter.convert(payload);
+      final convertMs = DateTime.now().difference(started).inMilliseconds;
+
+      final result = await _api.guidance(jpeg);
+      final totalMs = DateTime.now().difference(started).inMilliseconds;
+
+      if (_diagnostics) {
+        if (result.ok) {
+          final g = result.value!;
+          final scores = g.checks
+              .map((c) => '${c.name}=${c.score.toStringAsFixed(2)}')
+              .join(' ');
+          debugPrint('[guidance] ok in ${totalMs}ms '
+              '(convert ${convertMs}ms, ${jpeg.length ~/ 1024}KB) '
+              'ready=${g.ready} $scores');
+        } else {
+          debugPrint('[guidance] FAILED in ${totalMs}ms. '
+              '${result.failure!.kind}. ${result.failure!.technical}');
+        }
+      }
+
+      _applyGuidance(result);
+    } catch (e, st) {
+      debugPrint('[guidance] threw after '
+          '${DateTime.now().difference(started).inMilliseconds}ms. $e');
+      debugPrint('$st');
+    } finally {
       _watchdog?.cancel();
       _checkInFlight = false;
-    });
+    }
   }
 
   void _applyGuidance(ApiResult<GuidanceResult> result) {
@@ -203,7 +245,22 @@ class _CaptureScreenState extends State<CaptureScreen>
 
     try {
       await controller.stopImageStream();
-      final file = await controller.takePicture();
+
+      // The camera plugin reconfigures its capture session when the stream
+      // stops. Calling takePicture before that completes throws a null session
+      // error inside the plugin, which surfaces as a channel error. A short
+      // settle plus one retry covers it without a visible delay.
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+
+      XFile file;
+      try {
+        file = await controller.takePicture();
+      } on CameraException catch (e) {
+        debugPrint('First capture attempt failed (${e.code}). Retrying once.');
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        file = await controller.takePicture();
+      }
+
       final bytes = await file.readAsBytes();
       if (!mounted) return;
 
