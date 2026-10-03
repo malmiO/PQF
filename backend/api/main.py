@@ -24,8 +24,8 @@ import io
 import time
 from typing import List
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -109,6 +109,12 @@ class BatchImageResult(BaseModel):
     fqs: float
     role: str
     passed: bool
+    # Included so the app can explain a verdict rather than only state it. A
+    # seller told an image was not used, with no reason, learns nothing.
+    tqs: float = 0.0
+    sqs: float = 0.0
+    reason: str = ""
+    weakest: str = ""
 
 
 class BatchResponse(BaseModel):
@@ -402,10 +408,29 @@ def batch(files: List[UploadFile] = File(..., media_type="multipart/form-data"))
     result = process_batch(payload)
 
     index_of = {id(d): i for i, d in enumerate(result.all_decisions)}
+
+    def _weakest(d) -> str:
+        """The single lowest scoring criterion, which is what to fix first."""
+        scores = dict(getattr(d, "technical_scores", {}) or {})
+        scores.update(d.semantic_scores or {})
+        if not scores:
+            return ""
+        return min(scores.items(), key=lambda kv: kv[1])[0]
+
+    # Report every image, not only the selected ones. An image that was left out
+    # is exactly the one the user most wants explained.
     selected = [
-        BatchImageResult(index=index_of.get(id(d), -1),
-                         fqs=round(d.fqs, 3), role=d.role, passed=d.passed)
-        for d in result.selected
+        BatchImageResult(
+            index=i,
+            fqs=round(d.fqs, 3),
+            tqs=round(d.tqs, 3),
+            sqs=round(d.sqs, 3),
+            role=d.role,
+            passed=d.passed,
+            reason=d.reason,
+            weakest=_weakest(d),
+        )
+        for i, d in enumerate(result.all_decisions)
     ]
     role_sets = {
         role: [getattr(d, "path", "") for d in items]
@@ -524,3 +549,114 @@ def test_page():
     provides a working multi file picker and shows the verdict clearly.
     """
     return _TEST_PAGE
+
+# ---------------------------------------------------------------------------
+# Video, Layer 3
+# ---------------------------------------------------------------------------
+@app.get("/music")
+def music(category: str | None = None):
+    """Recommend an audio mood and list the tracks available.
+
+    The framework recommends and explains. The owner chooses. It never selects
+    music automatically, because an automatically decided correct track is a
+    subjective judgement with no ground truth to validate against, and because
+    attaching arbitrary music to publishable content raises licensing exposure.
+    """
+    from pathlib import Path
+    from ..video import audio as A
+
+    base = Path(__file__).resolve().parents[2]
+    rec = A.recommend(category, base)
+    return {
+        "recommended_mood": rec.mood,
+        "reason": rec.reason,
+        "mood_descriptions": A.MOODS,
+        "tracks": [
+            {"id": t.id, "title": t.title, "mood": t.mood,
+             "recommended": t.mood == rec.mood, "attribution": t.attribution}
+            for t in rec.tracks
+        ],
+        "note": "Audio is recommended as audience appropriate. No claim is made "
+                "that it is optimal or that it will improve sales.",
+    }
+
+
+@app.post("/video")
+def video(
+    files: List[UploadFile] = File(...),
+    roles: str = Form(""),
+    format: str = Form("square"),
+    track_id: str = Form(""),
+    motion: bool = Form(True),
+):
+    """Assemble certified images into a marketing video.
+
+    Images are ordered by role, meaning the main shot leads, angles follow, and
+    the detail shot comes late. That order is decided by the framework's role
+    classifier, so the structure of the video follows from the standard rather
+    than from upload order.
+
+    No video content is generated. Every frame derives from a photograph the
+    framework certified, which is what keeps the quality guarantee meaningful
+    through to the final output.
+    """
+    import tempfile
+    from pathlib import Path
+    from ..video import audio as A
+    from ..video.builder import build_video, ffmpeg_available, ROLE_ORDER
+
+    if not ffmpeg_available():
+        raise HTTPException(
+            503, "Video assembly is unavailable because ffmpeg is not installed.")
+    if not files:
+        raise HTTPException(400, "No images received.")
+    if len(files) > 8:
+        raise HTTPException(413, "Too many images. Send eight or fewer.")
+
+    base = Path(__file__).resolve().parents[2]
+    tmp = Path(tempfile.mkdtemp(prefix="pqf_video_"))
+
+    role_list = [r.strip() for r in roles.split(",")] if roles else []
+    saved = []
+    for i, f in enumerate(files):
+        data = _read_upload(f)
+        p = tmp / f"img_{i:02d}.jpg"
+        p.write_bytes(data)
+        role = role_list[i] if i < len(role_list) else "hero_shot"
+        saved.append((role, p))
+
+    # Order by role. Anything with an unrecognised role goes last rather than
+    # being discarded, since dropping a user's image without saying so would be
+    # worse than including it.
+    ordered = []
+    for role in ROLE_ORDER:
+        ordered += [p for r, p in saved if r == role]
+    ordered += [p for r, p in saved if r not in ROLE_ORDER]
+
+    if not ordered:
+        raise HTTPException(400, "No usable images after ordering.")
+
+    audio_path = A.resolve_track(track_id, base) if track_id else None
+    out = tmp / "marketing_video.mp4"
+
+    try:
+        result = build_video(
+            ordered, out,
+            format_name=format if format in ("square", "vertical") else "square",
+            audio_path=audio_path,
+            motion=motion,
+        )
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+    return FileResponse(
+        path=str(result.path),
+        media_type="video/mp4",
+        filename="marketing_video.mp4",
+        headers={
+            "X-Video-Duration": str(result.duration_seconds),
+            "X-Video-Images": str(result.image_count),
+            "X-Video-Format": result.format_name,
+            "X-Video-Audio": "1" if result.has_audio else "0",
+        },
+    )

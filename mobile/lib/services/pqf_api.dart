@@ -87,22 +87,64 @@ class GuidanceResult {
 class BatchImageResult {
   final int index;
   final double fqs;
+  final double tqs;
+  final double sqs;
   final String role;
   final bool passed;
+  final String reason;
+  final String weakest;
 
   BatchImageResult({
     required this.index,
     required this.fqs,
+    required this.tqs,
+    required this.sqs,
     required this.role,
     required this.passed,
+    required this.reason,
+    required this.weakest,
   });
 
   factory BatchImageResult.fromJson(Map<String, dynamic> j) => BatchImageResult(
         index: j['index'] as int,
         fqs: (j['fqs'] as num).toDouble(),
+        tqs: ((j['tqs'] ?? 0) as num).toDouble(),
+        sqs: ((j['sqs'] ?? 0) as num).toDouble(),
         role: j['role'] as String,
         passed: j['passed'] as bool,
+        reason: (j['reason'] ?? '') as String,
+        weakest: (j['weakest'] ?? '') as String,
       );
+
+  /// What to fix first, in the seller's terms rather than the framework's.
+  String? get improvement {
+    if (passed) return null;
+    switch (weakest) {
+      case 'sharpness':
+        return 'Not sharp enough. Keep the phone still and tap to focus.';
+      case 'exposure':
+        return 'Lighting is off. Try near a window, out of direct sun.';
+      case 'background':
+        return 'Background is not clean enough. Use a plain light surface.';
+      case 'colorcast':
+        return 'Colours look tinted. Change the lighting.';
+      case 'brisque':
+      case 'piqe':
+        return 'Overall image quality is low. Clean the lens and retake.';
+      case 'subject_centering':
+        return 'Centre the product in the frame.';
+      case 'feature_visibility':
+        return 'Move closer so the details are clear.';
+      case 'marketing_suitability':
+        return 'Does not look ready to post. Improve lighting and framing.';
+      case 'angle_value':
+        return 'Try an angle that shows more of the product.';
+      case 'lighting_style_quality':
+        return 'Improve the lighting. Avoid harsh shadows.';
+      default:
+        return 'Retake this one.';
+    }
+  }
 
   String get roleLabel {
     switch (role) {

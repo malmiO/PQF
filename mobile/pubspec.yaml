@@ -31,11 +31,14 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Camera preview and frame stream.
+# Camera preview and frame stream.
   camera: ^0.10.5+9
 
   # HTTP client for talking to the PQF API.
   http: ^1.2.0
+
+  # Used to declare the MIME type on multipart uploads.
+  http_parser: ^4.0.2
 
   # Converting camera frames to JPEG for the guidance endpoint.
   image: ^4.1.7
@@ -43,9 +46,18 @@ dependencies:
   # Selecting photos already on the phone, for the upload path.
   image_picker: ^1.0.7
 
-  # Saving the role tagged image set to the device.
+  # Saving the role tagged image set into the phone gallery, so the images
+  # appear in the normal Photos app and can be shared from there.
+  gal: ^2.3.0
+
+  # Sharing files directly, used as the fallback when gallery writing is
+  # refused or unavailable.
+  share_plus: ^13.3.0
+
+  # Temporary files for the share fallback.
   path_provider: ^2.1.2
 
+  # Reads configuration from a .env file that is not committed.
   flutter_dotenv: ^5.1.0
 
   # The following adds the Cupertino Icons font to your application.

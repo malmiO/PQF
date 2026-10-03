@@ -38,7 +38,16 @@ class _UploadScreenState extends State<UploadScreen> {
 
   Future<void> _pick() async {
     try {
-      final picked = await _picker.pickMultiImage(imageQuality: 92);
+      // NO imageQuality here, deliberately.
+      //
+      // Passing a quality value forces image_picker to re-encode the file. For
+      // a photograph that is already JPEG, that is a second lossy compression,
+      // which measurably lowers sharpness and localised distortion scores. On
+      // images sitting near a role threshold it was enough to push them below
+      // it, so photographs that scored as hero shots when read directly were
+      // classified as angle shots by the app. Sending the original bytes means
+      // the framework scores what the user actually has.
+      final picked = await _picker.pickMultiImage();
       if (picked.isEmpty) return;
 
       final remaining = maxImages - _images.length;
