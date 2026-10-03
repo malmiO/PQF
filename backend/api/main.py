@@ -20,6 +20,12 @@ so use your machine's LAN address, for example http://192.168.1.5:8000
 """
 from __future__ import annotations
 
+# Load secrets BEFORE anything reads the environment (fixed 2026-10-01:
+# without this the server silently used mock semantic scores).
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import io
 import time
 from typing import List
@@ -32,6 +38,19 @@ from pydantic import BaseModel
 from ..pqf import config
 from ..pqf.pipeline import score_image, process_batch
 from ..pqf.combination import ImageDecision
+
+def _semantic_mode() -> str:
+    if os.environ.get("PQF_SEMANTIC_MOCK") == "1":
+        return "MOCK (testing only, scores are not real judgements)"
+    return "LIVE" if os.environ.get("GEMINI_API_KEY") else "MISSING_KEY"
+
+
+if _semantic_mode() == "MISSING_KEY":
+    raise RuntimeError(
+        "GEMINI_API_KEY is not set. Put it in backend .env (local) or the "
+        "host's environment variables (deployed). For offline tests only, "
+        "set PQF_SEMANTIC_MOCK=1.")
+
 
 app = FastAPI(
     title="Photography Quality Framework API",
@@ -62,6 +81,37 @@ GUIDANCE_SHARPNESS_MIN = 0.12 # lower than scoring, since variance falls with si
 GUIDANCE_MIN_PRODUCT_AREA = 0.10
 GUIDANCE_MAX_PRODUCT_AREA = 0.68
 GUIDANCE_CENTRE_TOLERANCE = 0.34
+
+# Per shot framing for LIVE GUIDANCE only (added 2026-10-03). The certification
+# rules are unchanged. A detail shot is a close up: the product legitimately fills
+# the frame and touches its edges, so the main shot bounds would block it forever.
+# (min product area, max product area, product may touch the edges)
+GUIDANCE_SHOT_FRAMING = {
+    "main":   (GUIDANCE_MIN_PRODUCT_AREA, GUIDANCE_MAX_PRODUCT_AREA, False),
+    "angle":  (GUIDANCE_MIN_PRODUCT_AREA, GUIDANCE_MAX_PRODUCT_AREA, False),
+    "extra":  (GUIDANCE_MIN_PRODUCT_AREA, GUIDANCE_MAX_PRODUCT_AREA, False),
+    "detail": (0.30, 1.00, True),
+}
+
+
+def _crop_to_platform(img):
+    """Centre crop an image ARRAY to the platform aspect range (4:5 to 1.91:1).
+
+    Same geometry as _platform_format, which crops the captured photo before
+    scoring. Guidance uses it so the live checks look at exactly the region
+    that will be scored, not the strips above and below it that will be
+    thrown away (added 2026-10-03)."""
+    lo, hi = config.T0_ASPECT_MIN, config.T0_ASPECT_MAX
+    h, w = img.shape[:2]
+    if w / h < lo:
+        new_h = int(w / lo)
+        top = (h - new_h) // 2
+        return img[top:top + new_h, :]
+    if w / h > hi:
+        new_w = int(h * hi)
+        left = (w - new_w) // 2
+        return img[:, left:left + new_w]
+    return img
 # Declared content types we accept. octet-stream is included deliberately,
 # because several HTTP clients, including Flutter's, omit the type on a
 # multipart part and the transport defaults to octet-stream. Rejecting on the
@@ -175,6 +225,42 @@ def _read_upload(f: UploadFile) -> bytes:
     return data
 
 
+def _platform_format(data: bytes) -> bytes:
+    """Fit an out of range photo to the nearest platform aspect, losslessly.
+
+    Upright phone photos are 3:4 or 9:16. T0 accepts 4:5 to 1.91:1, the range
+    social feeds display, so ordinary upright photos failed T0 and scored zero.
+    Platforms centre crop such photos on upload, so the same step runs here,
+    BEFORE the framework, and the framework scores the image that would be
+    posted. In range images are returned byte for byte, no re-encode. Out of
+    range images are centre cropped and encoded as PNG (lossless). The
+    framework, including T0, is unchanged. (Added 2026-10-01.)
+    """
+    import numpy as np
+    import cv2
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return data
+    lo, hi = config.T0_ASPECT_MIN, config.T0_ASPECT_MAX
+    h, w = img.shape[:2]
+    if lo <= w / h <= hi:
+        return data
+    if max(h, w) > 2048:  # keep the PNG well under the model's upload limit
+        k = 2048 / max(h, w)
+        img = cv2.resize(img, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA)
+        h, w = img.shape[:2]
+    if w / h < lo:  # too tall. Crop last, rounding down, so it lands in range
+        new_h = int(w / lo)
+        top = (h - new_h) // 2
+        img = img[top:top + new_h, :]
+    else:
+        new_w = int(h * hi)
+        left = (w - new_w) // 2
+        img = img[:, left:left + new_w]
+    ok, buf = cv2.imencode(".png", img)
+    return buf.tobytes() if ok else data
+
+
 def _shape(d: ImageDecision) -> tuple[list, list, list]:
     """Turn a decision into per criterion lists plus corrective feedback."""
     tech_raw = getattr(d, "technical_scores", {}) or {}
@@ -202,7 +288,8 @@ def _shape(d: ImageDecision) -> tuple[list, list, list]:
     return technical, semantic, feedback
 
 
-def _framing_check(img, T) -> tuple[float, str]:
+def _framing_check(img, T, min_area: float = None, max_area: float = None,
+                   allow_edges: bool = False) -> tuple[float, str]:
     """Cheap composition check for live guidance.
 
     Returns a score and, when it fails, the single most useful instruction.
@@ -236,6 +323,8 @@ def _framing_check(img, T) -> tuple[float, str]:
 
     h, w = mask.shape[:2]
     area = float(mask.mean())
+    min_area = GUIDANCE_MIN_PRODUCT_AREA if min_area is None else min_area
+    max_area = GUIDANCE_MAX_PRODUCT_AREA if max_area is None else max_area
 
     if area < 0.004:
         return 0.0, "Point the camera at your product."
@@ -250,13 +339,13 @@ def _framing_check(img, T) -> tuple[float, str]:
     # Cut off. A small margin avoids flagging a product that merely sits close
     # to the edge without crossing it.
     m = max(2, int(min(h, w) * 0.02))
-    if top <= m or left <= m or bottom >= h - 1 - m or right >= w - 1 - m:
+    if not allow_edges and (top <= m or left <= m or bottom >= h - 1 - m or right >= w - 1 - m):
         return 0.10, "Part of the product is cut off. Move back a little."
 
-    if area < GUIDANCE_MIN_PRODUCT_AREA:
+    if area < min_area:
         return 0.15, "Move closer. The product is too small in the frame."
 
-    if area > GUIDANCE_MAX_PRODUCT_AREA:
+    if area > max_area:
         return 0.25, "Move back slightly. Leave a little space around the product."
 
     # Off centre, measured from the centroid of the product region as a
@@ -284,6 +373,8 @@ def health():
         "status": "ok",
         "framework_version": getattr(config, "SPEC_VERSION", "1.3"),
         "semantic_model": getattr(config, "GEMINI_MODEL", "unknown"),
+        "semantic_mode": _semantic_mode(),
+        "metrics": __import__("backend.pqf.technical", fromlist=["metric_status"]).metric_status(),
         "fqs_alpha": config.FQS_ALPHA,
         "fqs_beta": config.FQS_BETA,
         "fqs_pass_threshold": config.FQS_PASS_THRESHOLD,
@@ -316,7 +407,7 @@ def criteria():
 def score(file: UploadFile = File(...)):
     """Full framework evaluation of one image. Costs one semantic model call."""
     t0 = time.time()
-    data = _read_upload(file)
+    data = _platform_format(_read_upload(file))
     d = score_image(data, path=file.filename, mime=file.content_type)
     technical, semantic, feedback = _shape(d)
     return ScoreResponse(
@@ -328,7 +419,9 @@ def score(file: UploadFile = File(...)):
 
 
 @app.post("/guidance", response_model=GuidanceResponse)
-def guidance(file: UploadFile = File(...)):
+def guidance(file: UploadFile = File(...),
+             shot: str = Form("main"),
+             rotation: int = Form(0)):
     """Fast pre capture check. Cheap deterministic criteria only.
 
     Runs sharpness, exposure and background, which are the faults a user can
@@ -352,6 +445,20 @@ def guidance(file: UploadFile = File(...)):
     if img is None:
         raise HTTPException(400, "Could not decode the image.")
 
+    # Upright the frame if the client sends it in sensor orientation.
+    rot = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+           270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(int(rotation) % 360)
+    if rot is not None:
+        img = cv2.rotate(img, rot)
+
+    # Check only the region that will be scored. The captured photo is centre
+    # cropped to 4:5 before scoring, so the strips above and below are thrown
+    # away; judging them made a well placed product read as cut off and the
+    # background as dirty whenever the room showed at the top or bottom.
+    img = _crop_to_platform(img)
+    shot = shot if shot in GUIDANCE_SHOT_FRAMING else "main"
+    min_area, max_area, allow_edges = GUIDANCE_SHOT_FRAMING[shot]
+
     # Reduced working size for live use. Sharpness is resolution dependent, so
     # the threshold below is deliberately lower than the scoring threshold.
     h, w = img.shape[:2]
@@ -365,9 +472,12 @@ def guidance(file: UploadFile = File(...)):
                           ("exposure", T.t2_exposure, GUIDANCE_PASS_MIN),
                           ("background", T.t3_background, GUIDANCE_PASS_MIN)):
         s = float(fn(img))
+        # A detail close up has no background to speak of, so background is
+        # reported but does not block a detail shot in live guidance.
+        ok = True if (shot == "detail" and name == "background") else s >= thr
         checks.append(CriterionScore(name=name, score=round(s, 3),
                                      weight=config.TQS_WEIGHTS[name],
-                                     passed=s >= thr))
+                                     passed=ok))
 
     # Framing. Without this, a badly composed shot shows three green lights,
     # because the other three criteria say nothing about where the product sits
@@ -375,7 +485,7 @@ def guidance(file: UploadFile = File(...)):
     # semantic criterion after capture. This is a cheap deterministic proxy for
     # live use only, computed from the same product region the technical
     # criteria already use, so it introduces no new criterion to the framework.
-    framing_score, framing_msg = _framing_check(img, T)
+    framing_score, framing_msg = _framing_check(img, T, min_area, max_area, allow_edges)
     checks.append(CriterionScore(name="framing", score=round(framing_score, 3),
                                  weight=0.0,
                                  passed=framing_score >= GUIDANCE_PASS_MIN))
@@ -403,7 +513,7 @@ def batch(files: List[UploadFile] = File(..., media_type="multipart/form-data"))
     if len(files) > 24:
         raise HTTPException(413, "Too many images. Send 24 or fewer.")
 
-    payload = [(_read_upload(f), f.filename or f"image_{i}")
+    payload = [(_platform_format(_read_upload(f)), f.filename or f"image_{i}")
                for i, f in enumerate(files)]
     result = process_batch(payload)
 

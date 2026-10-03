@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import '../services/pqf_api.dart';
 
@@ -177,85 +179,257 @@ class _InstructionBanner extends StatelessWidget {
   }
 }
 
-/// Framing guide drawn over the preview.
+/// The framing status, carried by colour AND an icon and a word (never colour
+/// alone), so it still reads for a colour blind user and in bright light.
+enum _FramingStatus { checking, good, adjust }
+
+extension _FramingStatusInfo on _FramingStatus {
+  Color get color {
+    switch (this) {
+      case _FramingStatus.good:
+        return const Color(0xFF2E7D32); // green
+      case _FramingStatus.adjust:
+        return const Color(0xFFF2A50C); // amber
+      case _FramingStatus.checking:
+        return Colors.white;
+    }
+  }
+
+  IconData get icon {
+    switch (this) {
+      case _FramingStatus.good:
+        return Icons.check_circle;
+      case _FramingStatus.adjust:
+        return Icons.error_outline;
+      case _FramingStatus.checking:
+        return Icons.hourglass_top;
+    }
+  }
+
+  String get word {
+    switch (this) {
+      case _FramingStatus.good:
+        return 'Good';
+      case _FramingStatus.adjust:
+        return 'Adjust';
+      case _FramingStatus.checking:
+        return 'Checking';
+    }
+  }
+}
+
+/// Full frame guide drawn over the preview.
 ///
-/// Catalogue composition wants the product centred with clear margin. Drawing
-/// the target region removes the guesswork, and it is the cheapest guidance in
-/// the whole app because it costs nothing to compute.
-class FramingGuide extends StatelessWidget {
-  const FramingGuide({super.key});
+/// WHY A FULL FRAME, NOT FOUR CORNERS. Every captured photo is centre cropped to
+/// 4:5 (full width kept) before it is scored, so the strips above and below that
+/// region are thrown away. The old corner marks showed neither what would be
+/// kept nor what would be discarded, so a user framed against the whole 9:16
+/// preview and the room above and below the product was scored as dirty
+/// background. This overlay darkens everything outside the scored 4:5 region and
+/// draws a status coloured border around it, so the user sees exactly what will
+/// be scored, with a per shot target inside it.
+class ScoredRegionGuide extends StatelessWidget {
+  final GuidanceResult guidance;
+  final bool waiting;
+
+  /// main | angle | detail | extra, from the current ShotPlan step.
+  final String shotType;
+
+  const ScoredRegionGuide({
+    super.key,
+    required this.guidance,
+    required this.waiting,
+    required this.shotType,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final hasData = guidance.checks.isNotEmpty;
+    final status = !hasData
+        ? _FramingStatus.checking
+        : (guidance.ready ? _FramingStatus.good : _FramingStatus.adjust);
+
+    final showInnerBox = shotType != 'detail';
+    final String caption;
+    if (shotType == 'detail') {
+      caption = 'Fill the frame with the label or texture';
+    } else if (shotType == 'angle') {
+      caption = 'Turn the product about 30 to 45 degrees';
+    } else {
+      caption = 'Place the product inside the box';
+    }
+
     return IgnorePointer(
-      // Positioned in the UPPER portion of the preview rather than centred.
-      // The instruction and guidance panels occupy the lower half, and a
-      // centred box put them directly over the product, hiding exactly what
-      // the user needs to see while framing it.
-      child: Align(
-        alignment: const Alignment(0, -0.42),
-        child: FractionallySizedBox(
-          widthFactor: 0.68,
-          heightFactor: 0.34,
-          child: Stack(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          final h = constraints.maxHeight;
+
+          // The scored region in PREVIEW coordinates: full preview width, height
+          // = width x 5 / 4 (aspect 4:5), centred vertically. This matches the
+          // server's centre crop of the captured photo. CameraPreview fills the
+          // Stack (StackFit.expand), so the full preview width is the full image
+          // width the server keeps. Clamp the height so it never exceeds the
+          // preview; a very tall preview then leaves darkened strips above and
+          // below, which is where all text sits.
+          final rectH = math.min(w * 5 / 4, h);
+          final top = (h - rectH) / 2;
+          final rect = Rect.fromLTWH(0, top, w, rectH);
+
+          return Stack(
             children: [
-              // Corner marks rather than a full rectangle. A closed box reads
-              // as a boundary the product must not cross. Corners suggest the
-              // area to fill without hiding the edges of the product itself.
               Positioned.fill(
-                child: CustomPaint(painter: _CornerPainter()),
+                child: CustomPaint(
+                  painter: _ScoredRegionPainter(
+                    rect: rect,
+                    borderColor: status.color,
+                    showInnerBox: showInnerBox,
+                  ),
+                ),
               ),
-              Align(
-                alignment: Alignment.bottomCenter,
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Text(
-                    'Fill this area with your product',
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.92),
-                      fontSize: 11.5,
-                      shadows: const [
-                        Shadow(color: Colors.black87, blurRadius: 5)
-                      ],
-                    ),
+              // Status chip, in the darkened strip ABOVE the scored region so it
+              // never covers the product.
+              Positioned(
+                top: (top - 44).clamp(8.0, double.infinity),
+                left: 0,
+                right: 0,
+                child: Center(child: _StatusChip(status: status)),
+              ),
+              // Per shot caption, in the darkened strip BELOW the scored region.
+              Positioned(
+                top: top + rectH + 10,
+                left: 24,
+                right: 24,
+                child: Text(
+                  caption,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.95),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    shadows: const [Shadow(color: Colors.black87, blurRadius: 5)],
                   ),
                 ),
               ),
             ],
-          ),
-        ),
+          );
+        },
       ),
     );
   }
 }
 
-class _CornerPainter extends CustomPainter {
+/// A small pill showing the framing status as icon + word, so status is never
+/// carried by the border colour alone.
+class _StatusChip extends StatelessWidget {
+  final _FramingStatus status;
+
+  const _StatusChip({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: status.color, width: 1.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(status.icon, color: status.color, size: 17),
+          const SizedBox(width: 6),
+          Text(
+            status.word,
+            style: TextStyle(
+              color: status.color,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScoredRegionPainter extends CustomPainter {
+  final Rect rect;
+  final Color borderColor;
+  final bool showInnerBox;
+
+  _ScoredRegionPainter({
+    required this.rect,
+    required this.borderColor,
+    required this.showInnerBox,
+  });
+
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white.withOpacity(0.85)
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
+    final dim = Paint()..color = Colors.black.withValues(alpha: 0.55);
 
-    final len = size.width * 0.14;
+    // Darken everything OUTSIDE the scored rectangle. With a full width
+    // rectangle only the top and bottom strips exist, but the left/right rects
+    // are drawn too so this stays correct if the preview is ever not full width.
+    if (rect.top > 0) {
+      canvas.drawRect(Rect.fromLTRB(0, 0, size.width, rect.top), dim);
+    }
+    if (rect.bottom < size.height) {
+      canvas.drawRect(
+          Rect.fromLTRB(0, rect.bottom, size.width, size.height), dim);
+    }
+    if (rect.left > 0) {
+      canvas.drawRect(Rect.fromLTRB(0, rect.top, rect.left, rect.bottom), dim);
+    }
+    if (rect.right < size.width) {
+      canvas.drawRect(
+          Rect.fromLTRB(rect.right, rect.top, size.width, rect.bottom), dim);
+    }
 
-    // top left
-    canvas.drawLine(const Offset(0, 0), Offset(len, 0), paint);
-    canvas.drawLine(const Offset(0, 0), Offset(0, len), paint);
-    // top right
-    canvas.drawLine(Offset(size.width, 0), Offset(size.width - len, 0), paint);
-    canvas.drawLine(Offset(size.width, 0), Offset(size.width, len), paint);
-    // bottom left
-    canvas.drawLine(Offset(0, size.height), Offset(len, size.height), paint);
-    canvas.drawLine(Offset(0, size.height), Offset(0, size.height - len), paint);
-    // bottom right
-    canvas.drawLine(Offset(size.width, size.height),
-        Offset(size.width - len, size.height), paint);
-    canvas.drawLine(Offset(size.width, size.height),
-        Offset(size.width, size.height - len), paint);
+    // Solid rounded border around the scored region, coloured by status.
+    final border = Paint()
+      ..color = borderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(16));
+    canvas.drawRRect(rrect, border);
+
+    // Per shot target: a centred dashed box covering about 50% of the scored
+    // region's area (side factor sqrt(0.5)). Omitted for a detail close up,
+    // which is meant to fill the whole frame.
+    if (showInnerBox) {
+      const factor = 0.7071; // sqrt(0.5): 50% of the area
+      final boxW = rect.width * factor;
+      final boxH = rect.height * factor;
+      final box = Rect.fromCenter(
+          center: rect.center, width: boxW, height: boxH);
+      final dashPaint = Paint()
+        ..color = Colors.white.withValues(alpha: 0.9)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2;
+      _drawDashedRRect(
+          canvas, RRect.fromRectAndRadius(box, const Radius.circular(10)),
+          dashPaint);
+    }
+  }
+
+  void _drawDashedRRect(Canvas canvas, RRect rrect, Paint paint,
+      {double dash = 9, double gap = 6}) {
+    final path = Path()..addRRect(rrect);
+    for (final metric in path.computeMetrics()) {
+      var dist = 0.0;
+      while (dist < metric.length) {
+        final len = math.min(dash, metric.length - dist);
+        canvas.drawPath(metric.extractPath(dist, dist + len), paint);
+        dist += dash + gap;
+      }
+    }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _ScoredRegionPainter old) =>
+      old.rect != rect ||
+      old.borderColor != borderColor ||
+      old.showInnerBox != showInnerBox;
 }

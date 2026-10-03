@@ -15,6 +15,7 @@ venv/
 
 # Secrets — API keys must never be committed
 .env
+*.env
 *.key
 backend/api/secrets.py
 
@@ -73,3 +74,13 @@ build/
 .idea/
 *.iml
 .vscode/
+
+# Repo hygiene (added 2026-10-03). 
+**/config.env
+*.bak_*
+*backup*/
+pqf_fixes_*.zip
+.pytest_cache/
+test-img/
+
+backend/tests/

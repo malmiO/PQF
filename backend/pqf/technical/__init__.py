@@ -168,12 +168,30 @@ def t3_background(img: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 # T4 — BRISQUE (lower raw is better)
 # ---------------------------------------------------------------------------
+_WARNED: set = set()
+
+
+def _warn_abstain(metric: str, err: Exception) -> None:
+    """Abstaining scores 1.0 and inflates TQS, so it must never be silent."""
+    if metric not in _WARNED:
+        _WARNED.add(metric)
+        import logging
+        logging.getLogger("pqf").warning(
+            "%s is ABSTAINING (scoring 1.0) because it failed: %r. "
+            "Fix the install before reporting any TQS.", metric, err)
+
+
+def metric_status() -> dict:
+    return {"abstaining": sorted(_WARNED)}
+
+
 def t4_brisque(img: np.ndarray) -> float:
     try:
         from brisque import BRISQUE
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         raw = BRISQUE().score(rgb)
-    except Exception:
+    except Exception as e:
+        _warn_abstain("T4 BRISQUE", e)
         # If the library/model is unavailable, abstain neutrally (documented).
         return 1.0
     return _clip01(1.0 - raw / config.T4_BRISQUE_MAX)
@@ -192,7 +210,8 @@ def t5_piqe(img: np.ndarray) -> float:
     """
     try:
         import pypiqe
-    except Exception:
+    except Exception as e:
+        _warn_abstain("T5 PIQE", e)
         return 1.0
 
     top, left, h, w = product_bbox(img)
@@ -207,7 +226,8 @@ def t5_piqe(img: np.ndarray) -> float:
         gray = _to_gray(crop)
         out = pypiqe.piqe(gray)
         raw = out[0] if isinstance(out, tuple) else out
-    except Exception:
+    except Exception as e:
+        _warn_abstain("T5 PIQE", e)
         return 1.0
 
     return _clip01(1.0 - float(raw) / config.T5_PIQE_MAX)
@@ -254,9 +274,14 @@ class TechnicalResult:
     hard_reject: bool = False
 
 
-def compute_tqs(img: np.ndarray) -> TechnicalResult:
-    """Run the full technical engine on a standardised image."""
-    if not t0_compliance(img):
+def compute_tqs(img: np.ndarray, check_gate: bool = True) -> TechnicalResult:
+    """Run the full technical engine on a standardised image.
+
+    T0 is a rule about the ORIGINAL image, so the pipeline checks it there and
+    calls this with check_gate=False. Re-checking on the standardised image
+    rejected every image wider than 1.6:1 (fixed 2026-10-01).
+    """
+    if check_gate and not t0_compliance(img):
         return TechnicalResult(passed_gate=False, hard_reject=True)
 
     scores = {

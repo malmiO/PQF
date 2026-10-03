@@ -67,6 +67,14 @@ def score_image(image_bytes: bytes, path: str | None = None,
     from ..technical import compute_tqs
 
     # Decode the encoded bytes into an image array.
+    # Trust the bytes, not the caller, for the type sent to the semantic model.
+    if image_bytes[:4] == b"\x89PNG":
+        mime = "image/png"
+    elif image_bytes[:2] == b"\xff\xd8":
+        mime = "image/jpeg"
+    elif image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        mime = "image/webp"
+
     buf = np.frombuffer(image_bytes, dtype=np.uint8)
     img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
     if img is None:
@@ -87,7 +95,7 @@ def score_image(image_bytes: bytes, path: str | None = None,
     img = standardise(img)
 
     # Technical engine. T0 is re-checked internally and will pass here.
-    tech = compute_tqs(img)
+    tech = compute_tqs(img, check_gate=False)  # T0 already checked on the original
 
     # Defensive. Should not trigger, since T0 was checked on the original above.
     if not tech.passed_gate:
@@ -113,11 +121,60 @@ def score_image(image_bytes: bytes, path: str | None = None,
     return _attach(d, path)
 
 
-def _select_best_set(passing: list) -> list:
-    """Select the set forwarded to the gate. Best by FQS, capped at the gate maximum."""
-    from ..combination.gate import GATE_SET_MAX
+def _meets(role: str, d) -> bool:
+    """True if a decision satisfies the specification's rule for a role."""
+    rule = config.ROLE_RULES[role]
+    return d.fqs >= rule["fqs_min"] and all(
+        (d.semantic_scores or {}).get(k, 0.0) >= v
+        for k, v in rule["criteria_min"].items())
+
+
+def _assign_roles_in_set(passing: list) -> list:
+    """Resolve roles across the SET, not image by image (fixed 2026-10-03).
+
+    Each image is first classified on its own by the specification's rules,
+    hero first. That turned every strong photograph into a hero, so a good
+    angled shot was never counted as an angle and the gate could not be passed
+    by taking better photographs. A set has ONE main shot, so:
+      1. the highest FQS hero stays the hero;
+      2. every OTHER hero is re-labelled angle, or else detail, if it meets
+         that role's rule;
+      3. a hero that meets neither stays an alternative hero.
+    Images already labelled angle or detail are untouched. The rules and
+    thresholds are the specification's own (config.ROLE_RULES), unchanged.
+    """
     ranked = sorted(passing, key=lambda d: d.fqs, reverse=True)
-    return ranked[:GATE_SET_MAX]
+    heroes = [d for d in ranked if d.role == "hero_shot"]
+    for d in heroes[1:]:
+        for role in ("angle_shot", "detail_shot"):
+            if _meets(role, d):
+                d.role = role
+                break
+    return ranked
+
+
+def _select_best_set(passing: list) -> list:
+    """Select the set forwarded to the gate, role aware (fixed 2026-10-03).
+
+    The old version kept the top images by FQS whatever their role, so a batch
+    of more than six could drop the only detail shot. The set now takes what the
+    gate requires first (one hero, the angles, one detail), each the best of its
+    role, then fills the remaining places by FQS, up to the gate maximum.
+    """
+    from ..combination.gate import (GATE_SET_MAX, GATE_MIN_HEROES,
+                                    GATE_MIN_ANGLES, GATE_MIN_DETAILS)
+    ranked = _assign_roles_in_set(passing)
+    need = {"hero_shot": GATE_MIN_HEROES, "angle_shot": GATE_MIN_ANGLES,
+            "detail_shot": GATE_MIN_DETAILS}
+    chosen = []
+    for role, n in need.items():
+        chosen += [d for d in ranked if d.role == role][:n]
+    for d in ranked:
+        if len(chosen) >= GATE_SET_MAX:
+            break
+        if d not in chosen:
+            chosen.append(d)
+    return sorted(chosen[:GATE_SET_MAX], key=lambda d: d.fqs, reverse=True)
 
 
 def process_batch(images: list) -> BatchResult:

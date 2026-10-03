@@ -44,6 +44,10 @@ class _CaptureScreenState extends State<CaptureScreen>
   bool _checkInFlight = false;
   DateTime _lastCheck = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// Logs the decoded guidance frame's dimensions exactly once, to confirm
+  /// whether the camera delivers frames upright or in sensor orientation.
+  bool _loggedFrameDims = false;
+
   /// Prints timing and scores for every guidance check. Leave on until the
   /// loop is confirmed working on a real device, then turn off.
   static const bool _diagnostics = true;
@@ -108,7 +112,7 @@ class _CaptureScreenState extends State<CaptureScreen>
       );
       final controller = CameraController(
         back,
-        ResolutionPreset.high,
+        ResolutionPreset.veryHigh,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.yuv420,
       );
@@ -172,7 +176,22 @@ class _CaptureScreenState extends State<CaptureScreen>
       final jpeg = FrameConverter.convert(payload);
       final convertMs = DateTime.now().difference(started).inMilliseconds;
 
-      final result = await _api.guidance(jpeg);
+      // The camera stream delivers frames in SENSOR orientation (landscape:
+      // width > height) while the phone is held upright, so the server is told
+      // to upright them with the camera's sensorOrientation rather than
+      // rotating in Dart. Log the frame size once to confirm this on device.
+      final sensorOrientation = _controller?.description.sensorOrientation ?? 0;
+      if (!_loggedFrameDims) {
+        _loggedFrameDims = true;
+        final landscape = payload.width > payload.height;
+        debugPrint('[guidance] decoded frame ${payload.width}x${payload.height} '
+            '(${landscape ? "LANDSCAPE / sensor orientation" : "upright"}), '
+            'sensorOrientation=$sensorOrientation -> rotation sent');
+      }
+
+      final shot = ShotPlan.at(_step).shotType;
+      final result =
+          await _api.guidance(jpeg, shot: shot, rotation: sensorOrientation);
       final totalMs = DateTime.now().difference(started).inMilliseconds;
 
       if (_diagnostics) {
@@ -437,7 +456,11 @@ class _CaptureScreenState extends State<CaptureScreen>
         fit: StackFit.expand,
         children: [
           CameraPreview(controller),
-          const FramingGuide(),
+          ScoredRegionGuide(
+            guidance: _guidance,
+            waiting: _checkInFlight,
+            shotType: step.shotType,
+          ),
           SafeArea(
             child: Column(
               children: [

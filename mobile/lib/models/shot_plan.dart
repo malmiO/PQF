@@ -31,6 +31,22 @@ class ShotStep {
     required this.why,
     required this.intendedRole,
   });
+
+  /// The shot type sent to POST /guidance (main | angle | detail | extra), so
+  /// live guidance applies the right per shot framing. Derived from the
+  /// intended role; it never tells the framework what role to assign.
+  String get shotType {
+    switch (intendedRole) {
+      case 'hero_shot':
+        return 'main';
+      case 'angle_shot':
+        return 'angle';
+      case 'detail_shot':
+        return 'detail';
+      default:
+        return 'extra';
+    }
+  }
 }
 
 class ShotPlan {

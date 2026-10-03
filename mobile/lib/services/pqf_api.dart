@@ -142,6 +142,15 @@ class BatchImageResult {
       case 'lighting_style_quality':
         return 'Improve the lighting. Avoid harsh shadows.';
       default:
+        if (reason.startsWith('t0')) {
+          return 'This photo is too small for social media. Retake it with the app camera.';
+        }
+        if (reason.startsWith('semantic_failed')) {
+          return 'The presentation check could not run. Check the connection and try again.';
+        }
+        if (reason == 'decode_failed') {
+          return 'This file could not be opened as a photo. Choose another.';
+        }
         return 'Retake this one.';
     }
   }
@@ -235,12 +244,21 @@ class PqfApi {
   /// A dropped guidance frame is not an error worth reporting. The camera must
   /// keep working, so failures here are returned quietly and the caller simply
   /// keeps the previous reading.
-  Future<ApiResult<GuidanceResult>> guidance(Uint8List jpegBytes) async {
+  Future<ApiResult<GuidanceResult>> guidance(
+    Uint8List jpegBytes, {
+    String shot = 'main',
+    int rotation = 0,
+  }) async {
     try {
       final req = http.MultipartRequest(
         'POST',
         Uri.parse('${ApiConfig.baseUrl}/guidance'),
-      )..files.add(http.MultipartFile.fromBytes(
+      )
+        // Per shot framing, and the rotation the server applies to upright a
+        // sensor orientation frame before it checks the scored 4:5 region.
+        ..fields['shot'] = shot
+        ..fields['rotation'] = rotation.toString()
+        ..files.add(http.MultipartFile.fromBytes(
           'file',
           jpegBytes,
           filename: 'frame.jpg',

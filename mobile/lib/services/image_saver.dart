@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:gal/gal.dart';
+import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -51,7 +52,7 @@ class ImageSaver {
       final suffix = counts[role]! > 1 ? '_${counts[role]}' : '';
       items.add(_NamedImage(
         name: '${_slug(productName)}_$role$suffix.jpg',
-        bytes: images[selected.index],
+        bytes: _cropForSave(images[selected.index]),
       ));
     }
 
@@ -130,6 +131,33 @@ class ImageSaver {
         method: methodShare,
         error: 'Could not save or share the photos. $e',
       );
+    }
+  }
+
+  /// Centre crop the SAVED copy to 4:5 (full width) when the photo is taller
+  /// than 4:5, so the saved file is exactly the region the framework scored.
+  /// The server centre crops the captured photo to 4:5 before scoring, so an
+  /// uncropped saved file would show strips the framework never judged.
+  ///
+  /// This is applied ONLY to the copy written to the gallery or share sheet.
+  /// The bytes sent to /score and /batch are never cropped or re-encoded.
+  static Uint8List _cropForSave(Uint8List bytes) {
+    try {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return bytes;
+      final w = decoded.width;
+      final h = decoded.height;
+      // 4:5 means width / height = 0.8. Only act when the photo is taller.
+      if (w / h >= 0.8) return bytes;
+      final newH = (w * 5 / 4).round();
+      if (newH >= h) return bytes;
+      final top = (h - newH) ~/ 2;
+      final cropped =
+          img.copyCrop(decoded, x: 0, y: top, width: w, height: newH);
+      return Uint8List.fromList(img.encodeJpg(cropped, quality: 95));
+    } catch (e) {
+      debugPrint('Save crop failed, saving the original. $e');
+      return bytes;
     }
   }
 

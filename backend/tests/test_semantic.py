@@ -89,10 +89,9 @@ def test_mock_returns_valid_structure():
     del os.environ["PQF_SEMANTIC_MOCK"]
 
 
-def test_no_key_falls_back_to_mock_flagged():
-    # ensure neither mock flag nor key set
+def test_no_key_fails_visibly_not_mock():
     os.environ.pop("PQF_SEMANTIC_MOCK", None)
     os.environ.pop("GEMINI_API_KEY", None)
     r = evaluate_semantic(_img_bytes())
-    assert r.ok
-    assert "mock" in r.justification.lower()
+    assert not r.ok
+    assert "GEMINI_API_KEY" in r.error
