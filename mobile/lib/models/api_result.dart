@@ -102,4 +102,39 @@ class ApiFailure {
         action: 'Try again.',
         technical: detail,
       );
+
+  /// The chosen music track is missing on the server (video /video 404).
+  static ApiFailure musicMissing(String? detail) => ApiFailure(
+        kind: FailureKind.badImage,
+        message: 'That music is not available. Choose another.',
+        action: 'Pick a different track, or make the video without music.',
+        technical: detail,
+      );
+
+  /// Video making is unavailable because the server has no ffmpeg (503).
+  static ApiFailure videoUnavailable(String? detail) => ApiFailure(
+        kind: FailureKind.serverError,
+        message: 'Video making is not available on the server right now.',
+        action: 'Your photos are saved. You can still save and share them.',
+        technical: detail,
+      );
+
+  /// The server tried to make the video but failed (500). Distinct from 503 so
+  /// a genuine assembly error is not hidden behind "not available".
+  static ApiFailure videoFailed(String? detail) => ApiFailure(
+        kind: FailureKind.serverError,
+        message: 'The video could not be made. Try again.',
+        action: 'If it keeps happening, try with fewer images.',
+        technical: detail,
+      );
+
+  /// A gateway timeout (502/504) or a client-side timeout while making the
+  /// video, usually a slow tunnel or connection rather than a server fault.
+  static ApiFailure videoTimeout(String? detail) => ApiFailure(
+        kind: FailureKind.timeout,
+        message: 'The connection timed out while making the video. '
+            'Try again on a stronger connection.',
+        action: 'Use Wi-Fi or a stronger signal, then try again.',
+        technical: detail,
+      );
 }

@@ -134,6 +134,11 @@ PROMPT_VERSION = "pqf-sem-v1"
 # Catalogue composition means the product is the non-near-white area. These
 # guard values keep the segmentation sane on unusual images.
 PRODUCT_MIN_FRACTION = 0.02        # below this, fall back to the central region
+PRODUCT_MAX_FRACTION = 0.90        # above this, segmentation failed -> central region
+PRODUCT_BG_DELTA_MIN = 22          # min colour difference from the estimated background
+PRODUCT_BG_DELTA_K = 4.0           # or 4 x the background's own unevenness, if larger
+PRODUCT_BG_DELTA_MAX = 40          # cap, so an uneven border cannot swallow the product
+PRODUCT_BG_MIN_MATCH = 0.60        # share of border that must match the estimate, else fall back
 PRODUCT_FALLBACK_FRACTION = 0.50   # central box side fraction used as fallback
 PRODUCT_CROP_MARGIN_PX = 12        # margin around the product bounding box
 PIQE_MIN_CROP_PX = 64              # below this the crop is too small for PIQE

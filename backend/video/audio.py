@@ -89,7 +89,16 @@ DEFAULT_MOOD = ("upbeat", "A bright track suits most social media product "
 
 
 def library_dir(base: Path) -> Path:
-    return base / "assets" / "music"
+    # The manifest is committed at backend/assets/music, and `base` is the repo
+    # root (main.py passes parents[2]). The original base/"assets"/"music"
+    # pointed at a repo-root folder that does not exist, so the committed
+    # manifest was never read and /music was always empty (fixed 2026-10-05).
+    # A repo-root assets/music is still honoured as a fallback if it exists.
+    backend_dir = base / "backend" / "assets" / "music"
+    if backend_dir.exists():
+        return backend_dir
+    root_dir = base / "assets" / "music"
+    return root_dir if root_dir.exists() else backend_dir
 
 
 def load_library(base: Path) -> list:
@@ -134,7 +143,10 @@ def recommend(category: str | None, base: Path) -> MoodRecommendation:
             mood, reason = m, r
             break
 
-    all_tracks = load_library(base)
+    # Only offer tracks whose audio file is actually present. Offering a track
+    # that cannot be played produced a silent video with no error (2026-10-05).
+    all_tracks = [t for t in load_library(base)
+                  if (library_dir(base) / t.filename).exists()]
     preferred = [t for t in all_tracks if t.mood == mood]
     others = [t for t in all_tracks if t.mood != mood]
 

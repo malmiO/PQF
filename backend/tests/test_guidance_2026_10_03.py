@@ -48,3 +48,33 @@ def test_sensor_orientation_frame_is_uprighted():
     land = cv2.rotate(cv2.imdecode(np.frombuffer(_frame(), np.uint8), 1), cv2.ROTATE_90_COUNTERCLOCKWISE)
     b = cv2.imencode(".jpg", land)[1].tobytes()
     assert _guide(b, rotation="90")["ready"]
+
+
+# ---- 2026-10-05: real lightbox photographs read light grey, not white ----
+def _grey_box(frac=0.06, bg=(204, 202, 201)):
+    f = np.full((1600, 1200, 3), bg, np.uint8)
+    f = (f.astype(np.int16) + np.linspace(-6, 6, 1200)[None, :, None]).clip(0, 255).astype(np.uint8)
+    s = int(1200 * frac ** 0.5)
+    cv2.rectangle(f, (600 - s // 2, 800 - s), (600 + s // 2, 800 + s), (40, 200, 230), -1)
+    for y in range(800 - s, 800 + s, 14):
+        cv2.putText(f, "ALOE LIPSTICK", (600 - s // 2 + 3, y), cv2.FONT_HERSHEY_SIMPLEX, .5, (30, 60, 30), 1)
+    return cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()
+
+
+def test_grey_lightbox_background_asks_for_more_brightness():
+    r = _guide(_grey_box())
+    assert r["exposure_hint"] == 1
+    assert "brightness" in r["feedback"][0].lower()
+
+
+def test_grey_background_is_not_mistaken_for_product_touching_the_edges():
+    r = _guide(_grey_box(frac=0.04))
+    framing = [c for c in r["checks"] if c["name"] == "framing"][0]
+    assert not framing["passed"]
+    assert any("closer" in f.lower() for f in r["feedback"])
+
+
+def test_product_mask_finds_the_product_on_a_grey_background():
+    from backend.pqf.technical import product_mask
+    img = cv2.imdecode(np.frombuffer(_grey_box(frac=0.06), np.uint8), 1)
+    assert 0.03 < product_mask(img).mean() < 0.30

@@ -35,6 +35,7 @@ mobile/macOS/
 mobile/assets/
 mobile/linux/
 mobile/windows/
+mobile/assets/config.env
 
 # OS / editor
 .DS_Store
@@ -67,9 +68,6 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 
-# Configuration containing the server address. Never commit this.
-.env
-
 # IDE
 .idea/
 *.iml
@@ -83,4 +81,12 @@ pqf_fixes_*.zip
 .pytest_cache/
 test-img/
 
-backend/tests/
+backend/assets/music/test_*.mp3
+
+# PQF hygiene 2026-10-05
+pqf_update_*.zip
+pqf_fixes_*/
+pqf_update_*/
+apply_fixes_*.py
+*.mp4
+Thumbs.db

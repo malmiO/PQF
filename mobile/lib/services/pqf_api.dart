@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
@@ -55,11 +57,17 @@ class GuidanceResult {
   final List<String> feedback;
   final int elapsedMs;
 
+  /// +1 means "raise the brightness", -1 "lower it", 0 no change. The app
+  /// applies this as camera exposure compensation, the step a photographer
+  /// does by hand when a grey lightbox background needs more light.
+  final int exposureHint;
+
   GuidanceResult({
     required this.ready,
     required this.checks,
     required this.feedback,
     required this.elapsedMs,
+    this.exposureHint = 0,
   });
 
   factory GuidanceResult.fromJson(Map<String, dynamic> j) => GuidanceResult(
@@ -69,6 +77,7 @@ class GuidanceResult {
             .toList(),
         feedback: (j['feedback'] as List).map((f) => f as String).toList(),
         elapsedMs: j['elapsed_ms'] as int,
+        exposureHint: (j['exposure_hint'] as num?)?.toInt() ?? 0,
       );
 
   /// The single instruction to show. Showing every failing criterion at once
@@ -203,6 +212,56 @@ class BatchResult {
       recapture?['instruction'] as String? ?? 'Capture a few more images.';
 }
 
+/// One music track offered for a video. The server RECOMMENDS; the owner chooses.
+class MusicTrack {
+  final String id;
+  final String title;
+  final String mood;
+  final bool recommended;
+  final String attribution;
+
+  MusicTrack({
+    required this.id,
+    required this.title,
+    required this.mood,
+    required this.recommended,
+    required this.attribution,
+  });
+
+  factory MusicTrack.fromJson(Map<String, dynamic> j) => MusicTrack(
+        id: j['id'] as String,
+        title: (j['title'] ?? j['id']) as String,
+        mood: (j['mood'] ?? '') as String,
+        recommended: (j['recommended'] ?? false) as bool,
+        attribution: (j['attribution'] ?? '') as String,
+      );
+}
+
+/// The server's music recommendation plus the installed tracks.
+class MusicRecommendation {
+  final String recommendedMood;
+  final String reason;
+  final List<MusicTrack> tracks;
+  final String note;
+
+  MusicRecommendation({
+    required this.recommendedMood,
+    required this.reason,
+    required this.tracks,
+    required this.note,
+  });
+
+  factory MusicRecommendation.fromJson(Map<String, dynamic> j) =>
+      MusicRecommendation(
+        recommendedMood: (j['recommended_mood'] ?? '') as String,
+        reason: (j['reason'] ?? '') as String,
+        tracks: (((j['tracks'] as List?) ?? const [])
+            .map((t) => MusicTrack.fromJson(t as Map<String, dynamic>))
+            .toList()),
+        note: (j['note'] ?? '') as String,
+      );
+}
+
 /// Client for the PQF API.
 ///
 /// Every method returns an [ApiResult] rather than throwing, so a caller never
@@ -305,6 +364,98 @@ class PqfApi {
       return ApiResult.success(
           BatchResult.fromJson(jsonDecode(body) as Map<String, dynamic>));
     } catch (e) {
+      return ApiResult.failure(_classify(e));
+    }
+  }
+
+  /// The URL that streams a track's audio preview, for the audio player.
+  String musicPreviewUrl(String trackId) =>
+      '${ApiConfig.baseUrl}/music/preview/$trackId';
+
+  /// Recommends a music mood and lists the installed tracks for a category.
+  Future<ApiResult<MusicRecommendation>> music(String? category) async {
+    try {
+      final uri = Uri.parse('${ApiConfig.baseUrl}/music').replace(
+        queryParameters: (category != null && category.isNotEmpty)
+            ? {'category': category}
+            : null,
+      );
+      final r = await _client.get(uri).timeout(const Duration(seconds: 15));
+      if (r.statusCode != 200) {
+        return ApiResult.failure(_fromResponse(r.statusCode, r.body));
+      }
+      return ApiResult.success(
+          MusicRecommendation.fromJson(jsonDecode(r.body) as Map<String, dynamic>));
+    } catch (e) {
+      return ApiResult.failure(_classify(e));
+    }
+  }
+
+  /// Assembles the certified images into a marketing video and returns the mp4.
+  ///
+  /// The SAME original bytes that were scored are sent, never re-encoded, so the
+  /// video is made from exactly the images the framework certified. [roles] are
+  /// in the same order as [images].
+  Future<ApiResult<Uint8List>> createVideo({
+    required List<Uint8List> images,
+    required List<String> roles,
+    required String format,
+    String? trackId,
+  }) async {
+    if (images.isEmpty) {
+      return ApiResult.failure(ApiFailure.badImage('No images to send.'));
+    }
+    try {
+      final req = http.MultipartRequest(
+        'POST',
+        Uri.parse('${ApiConfig.baseUrl}/video'),
+      )
+        ..fields['roles'] = roles.join(',')
+        ..fields['format'] = format;
+      if (trackId != null && trackId.isNotEmpty) {
+        req.fields['track_id'] = trackId;
+      }
+      for (var i = 0; i < images.length; i++) {
+        req.files.add(http.MultipartFile.fromBytes(
+          'files',
+          images[i],
+          filename: 'image_$i.jpg',
+          contentType: MediaType('image', 'jpeg'),
+        ));
+      }
+      final streamed = await req.send().timeout(ApiConfig.videoTimeout);
+      final bytes = await streamed.stream.toBytes();
+      final status = streamed.statusCode;
+      if (status == 200) {
+        return ApiResult.success(bytes);
+      }
+      final body = String.fromCharCodes(bytes);
+      // Log every /video failure so the real cause is visible, not hidden
+      // behind a user-facing message.
+      final snippet = body.length > 300 ? body.substring(0, 300) : body;
+      debugPrint('[video] POST /video failed: status=$status body=$snippet');
+      switch (status) {
+        case 404: // the chosen track is missing
+          return ApiResult.failure(ApiFailure.musicMissing(body));
+        case 503: // the server has no ffmpeg
+          return ApiResult.failure(ApiFailure.videoUnavailable(body));
+        case 500: // the server tried to assemble and failed
+          return ApiResult.failure(ApiFailure.videoFailed(body));
+        case 502:
+        case 504: // gateway timeout, usually a slow tunnel
+          return ApiResult.failure(ApiFailure.videoTimeout('HTTP $status. $body'));
+        default:
+          return ApiResult.failure(_fromResponse(status, body));
+      }
+    } on TimeoutException catch (e) {
+      debugPrint('[video] POST /video timed out: $e');
+      return ApiResult.failure(ApiFailure.videoTimeout(e.toString()));
+    } catch (e) {
+      debugPrint('[video] POST /video threw: $e');
+      final text = e.toString();
+      if (text.contains('TimeoutException') || text.contains('timed out')) {
+        return ApiResult.failure(ApiFailure.videoTimeout(text));
+      }
       return ApiResult.failure(_classify(e));
     }
   }

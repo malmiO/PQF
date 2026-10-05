@@ -82,6 +82,13 @@ GUIDANCE_MIN_PRODUCT_AREA = 0.10
 GUIDANCE_MAX_PRODUCT_AREA = 0.68
 GUIDANCE_CENTRE_TOLERANCE = 0.34
 
+# Background diagnosis for live guidance (2026-10-05). A uniform border whose
+# brightness is between these values is a plain background that reads grey.
+GUIDANCE_BG_GREY_MIN = 140
+GUIDANCE_BG_UNIFORM_SPREAD = 40
+GREY_BACKGROUND_MSG = ("The background looks grey. Raise the brightness: tap the "
+                       "product, then slide the brightness up.")
+
 # Per shot framing for LIVE GUIDANCE only (added 2026-10-03). The certification
 # rules are unchanged. A detail shot is a close up: the product legitimately fills
 # the frame and touches its edges, so the main shot bounds would block it forever.
@@ -92,6 +99,28 @@ GUIDANCE_SHOT_FRAMING = {
     "extra":  (GUIDANCE_MIN_PRODUCT_AREA, GUIDANCE_MAX_PRODUCT_AREA, False),
     "detail": (0.30, 1.00, True),
 }
+
+
+def _background_diagnosis(img) -> str:
+    """Why the background check failed: 'grey' or 'cluttered' (added 2026-10-05).
+
+    A plain light background that reads grey (a budget lightbox, auto exposure
+    pulling white towards mid grey) is fixed by RAISING THE BRIGHTNESS, not by
+    changing the surface. A cluttered background is fixed by changing the
+    surface. Telling them apart: a plain background is UNIFORM in the border.
+    """
+    import numpy as np
+    h, w = img.shape[:2]
+    b = max(2, int(min(h, w) * config.T3_BORDER_FRACTION))
+    border = np.concatenate([img[:b].reshape(-1, 3), img[-b:].reshape(-1, 3),
+                             img[:, :b].reshape(-1, 3), img[:, -b:].reshape(-1, 3)])
+    lum = border.mean(axis=1)
+    p10, p90 = np.percentile(lum, 10), np.percentile(lum, 90)
+    chroma = float(np.median(border.max(axis=1) - border.min(axis=1)))
+    uniform = (p90 - p10) <= GUIDANCE_BG_UNIFORM_SPREAD and chroma <= 25
+    if uniform and GUIDANCE_BG_GREY_MIN <= float(np.median(lum)) < config.T3_WHITE_THRESHOLD:
+        return "grey"
+    return "cluttered"
 
 
 def _crop_to_platform(img):
@@ -152,6 +181,9 @@ class GuidanceResponse(BaseModel):
     checks: List[CriterionScore]
     feedback: List[str]
     elapsed_ms: int
+    # +1 means "raise the brightness", -1 "lower it", 0 no change. Lets the app
+    # adjust exposure compensation itself, the step a photographer does by hand.
+    exposure_hint: int = 0
 
 
 class BatchImageResult(BaseModel):
@@ -313,8 +345,29 @@ def _framing_check(img, T, min_area: float = None, max_area: float = None,
     import cv2
 
     try:
-        near_white = np.all(img >= config.T3_WHITE_THRESHOLD, axis=2)
-        mask = ~near_white
+        # Background estimated from the border, as the framework now does, so a
+        # light grey lightbox background is not mistaken for product touching
+        # every edge (2026-10-05). No central fallback here on purpose: this
+        # check exists to catch a product that is too small.
+        hh, ww = img.shape[:2]
+        bb = max(2, int(min(hh, ww) * config.T3_BORDER_FRACTION))
+        border = np.concatenate([img[:bb].reshape(-1, 3), img[-bb:].reshape(-1, 3),
+                                 img[:, :bb].reshape(-1, 3), img[:, -bb:].reshape(-1, 3)])
+        bg = np.median(border, axis=0)
+        spread = np.median(np.abs(border - bg), axis=0).max()
+        # A detail close up fills the frame, so its border IS the product, not a
+        # plain light background. That is the intended framing for a detail shot.
+        if allow_edges and (float(bg.mean()) < GUIDANCE_BG_GREY_MIN
+                            or float(spread) > GUIDANCE_BG_UNIFORM_SPREAD / 2):
+            return 1.0, ""
+        delta = min(config.PRODUCT_BG_DELTA_MAX,
+                max(config.PRODUCT_BG_DELTA_MIN, config.PRODUCT_BG_DELTA_K * float(spread)))
+        matching = (np.abs(border.astype(np.int16) - bg.astype(np.int16)).max(axis=1)
+                <= config.PRODUCT_BG_DELTA_MIN).mean()
+        if matching < config.PRODUCT_BG_MIN_MATCH:
+            mask = ~np.all(img >= config.T3_WHITE_THRESHOLD, axis=2)   # border is product
+        else:
+            mask = np.abs(img.astype(np.int16) - bg.astype(np.int16)).max(axis=2) > delta
         kernel = np.ones((5, 5), np.uint8)
         mask = cv2.morphologyEx(
             mask.astype(np.uint8), cv2.MORPH_OPEN, kernel).astype(bool)
@@ -369,6 +422,15 @@ def _framing_check(img, T, min_area: float = None, max_area: float = None,
 # ---------------------------------------------------------------------------
 @app.get("/health")
 def health():
+    # Video readiness, so the app and the operator can see at a glance why video
+    # is unavailable: ffmpeg missing, or no music installed (added 2026-10-05).
+    from pathlib import Path as _Path
+    from ..video import audio as _A
+    from ..video.builder import ffmpeg_available
+    try:
+        _music_tracks = len(_A.recommend(None, _Path(__file__).resolve().parents[2]).tracks)
+    except Exception:
+        _music_tracks = 0
     return {
         "status": "ok",
         "framework_version": getattr(config, "SPEC_VERSION", "1.3"),
@@ -378,6 +440,8 @@ def health():
         "fqs_alpha": config.FQS_ALPHA,
         "fqs_beta": config.FQS_BETA,
         "fqs_pass_threshold": config.FQS_PASS_THRESHOLD,
+        "video_ready": ffmpeg_available(),
+        "music_tracks": _music_tracks,
     }
 
 
@@ -490,17 +554,30 @@ def guidance(file: UploadFile = File(...),
                                  weight=0.0,
                                  passed=framing_score >= GUIDANCE_PASS_MIN))
 
+    exposure_hint = 0
+    bg_failed = any(c.name == "background" and c.passed is False for c in checks)
+    bg_grey = bg_failed and _background_diagnosis(img) == "grey"
+    exp = next((c for c in checks if c.name == "exposure"), None)
+    if bg_grey and (exp is None or exp.score >= GUIDANCE_PASS_MIN):
+        exposure_hint = 1     # brighten, product exposure allows it
+    elif exp is not None and exp.passed is False:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        exposure_hint = 1 if float(gray.mean()) < config.T2_IDEAL_LOW else -1
+
     feedback = []
     for c in checks:
         if c.passed is False:
             if c.name == "framing" and framing_msg:
                 feedback.append(framing_msg)
+            elif c.name == "background" and bg_grey:
+                feedback.append(GREY_BACKGROUND_MSG)
             elif c.name in FEEDBACK:
                 feedback.append(FEEDBACK[c.name])
     return GuidanceResponse(
         ready=all(c.passed for c in checks),
         checks=checks, feedback=feedback,
         elapsed_ms=int((time.time() - t0) * 1000),
+        exposure_hint=exposure_hint,
     )
 
 
@@ -520,9 +597,19 @@ def batch(files: List[UploadFile] = File(..., media_type="multipart/form-data"))
     index_of = {id(d): i for i, d in enumerate(result.all_decisions)}
 
     def _weakest(d) -> str:
-        """The single lowest scoring criterion, which is what to fix first."""
-        scores = dict(getattr(d, "technical_scores", {}) or {})
-        scores.update(d.semantic_scores or {})
+        """The single lowest scoring criterion, which is what to fix first.
+
+        A hard-rejected image has no semantic scores, so its weakest criterion
+        is the lowest TECHNICAL one. This must never be empty for such an image:
+        a rejected photo with no reason is exactly the one the user most needs
+        explained, which is why it previously showed only "Retake this one"
+        (fixed 2026-10-05).
+        """
+        tech = dict(getattr(d, "technical_scores", {}) or {})
+        sem = dict(d.semantic_scores or {})
+        # For a hard reject use the technical scores alone; otherwise combine.
+        scores = tech if (getattr(d, "hard_rejected", False) and tech) \
+            else {**tech, **sem}
         if not scores:
             return ""
         return min(scores.items(), key=lambda kv: kv[1])[0]
@@ -691,6 +778,23 @@ def music(category: str | None = None):
     }
 
 
+@app.get("/music/preview/{track_id}")
+def music_preview(track_id: str):
+    """Stream one track so the owner can HEAR it before choosing (2026-10-05).
+
+    The owner confirms the music, so they must be able to listen first.
+    Unknown or missing tracks are a 404, never a silent substitute.
+    """
+    from pathlib import Path
+    from ..video import audio as A
+    base = Path(__file__).resolve().parents[2]
+    path = A.resolve_track(track_id, base)
+    if path is None:
+        raise HTTPException(404, "That music track is not available.")
+    return FileResponse(path=str(path), media_type="audio/mpeg",
+                        filename=path.name)
+
+
 @app.post("/video")
 def video(
     files: List[UploadFile] = File(...),
@@ -747,6 +851,10 @@ def video(
         raise HTTPException(400, "No usable images after ordering.")
 
     audio_path = A.resolve_track(track_id, base) if track_id else None
+    if track_id and audio_path is None:
+        # Never return a silent video when music was chosen (2026-10-05).
+        raise HTTPException(
+            404, "That music track is not available. Choose another track.")
     out = tmp / "marketing_video.mp4"
 
     try:

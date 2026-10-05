@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'config/api_config.dart';
 import 'screens/home_screen.dart';
+import 'screens/onboarding_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,11 +18,15 @@ Future<void> main() async {
     ApiConfig.loaded = false;
     debugPrint('Could not load .env ($e). Using built in defaults.');
   }
-  runApp(const PqfApp());
+  // Show the first-run guide only until it has been seen once.
+  final onboardingSeen = await OnboardingScreen.seen();
+  runApp(PqfApp(showOnboarding: !onboardingSeen));
 }
 
 class PqfApp extends StatelessWidget {
-  const PqfApp({super.key});
+  final bool showOnboarding;
+
+  const PqfApp({super.key, this.showOnboarding = false});
 
   @override
   Widget build(BuildContext context) {
@@ -48,7 +53,10 @@ class PqfApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const HomeScreen(),
+      routes: {'/home': (_) => const HomeScreen()},
+      home: showOnboarding
+          ? const OnboardingScreen(firstRun: true)
+          : const HomeScreen(),
     );
   }
 }

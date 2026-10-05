@@ -4,6 +4,7 @@ import '../models/api_result.dart';
 import '../services/pqf_api.dart';
 import '../widgets/error_view.dart';
 import 'mode_screen.dart';
+import 'onboarding_screen.dart';
 
 /// Entry point. Kept deliberately short, because every screen before the camera
 /// is a screen between the seller and the thing they came to do.
@@ -120,6 +121,15 @@ class _HomeScreenState extends State<HomeScreen> {
                               fontSize: 13,
                               color: Colors.grey.shade600,
                               height: 1.4),
+                        ),
+                        const SizedBox(height: 4),
+                        TextButton.icon(
+                          onPressed: () =>
+                              Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => const OnboardingScreen(),
+                          )),
+                          icon: const Icon(Icons.help_outline, size: 18),
+                          label: const Text('How it works'),
                         ),
                         const SizedBox(height: 8),
                       ],

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 
 import '../models/api_result.dart';
 import '../models/shot_plan.dart';
@@ -10,6 +11,7 @@ import '../services/pqf_api.dart';
 import '../services/frame_converter.dart';
 import '../widgets/guidance_overlay.dart';
 import '../widgets/error_view.dart';
+import '../widgets/help_sheet.dart';
 import 'results_screen.dart';
 
 /// Guided capture.
@@ -48,6 +50,21 @@ class _CaptureScreenState extends State<CaptureScreen>
   /// whether the camera delivers frames upright or in sensor orientation.
   bool _loggedFrameDims = false;
 
+  // --- Exposure assist (2026-10-05) -------------------------------------
+  /// Current exposure compensation applied to the camera, in EV. A grey
+  /// lightbox background is fixed by raising this, the step a photographer
+  /// does by hand, so the app nudges it when the server hints and offers a
+  /// manual slider for the same control.
+  double _exposureOffset = 0.0;
+  double _minExposure = 0.0;
+  double _maxExposure = 0.0;
+  bool _exposureSupported = false;
+
+  /// One automatic exposure step every this long, so it does not oscillate.
+  static const double exposureStepEv = 0.3;
+  static const Duration exposureStepInterval = Duration(milliseconds: 1500);
+  DateTime _lastExposureStep = DateTime.fromMillisecondsSinceEpoch(0);
+
   /// Prints timing and scores for every guidance check. Leave on until the
   /// loop is confirmed working on a real device, then turn off.
   static const bool _diagnostics = true;
@@ -69,6 +86,10 @@ class _CaptureScreenState extends State<CaptureScreen>
   /// interval this is roughly two seconds of steady framing, long enough to
   /// exclude a momentary pass during movement.
   static const int stableFramesNeeded = 3;
+
+  /// A captured frame whose mean brightness (0..255) is below this is treated
+  /// as black and never sent for scoring.
+  static const int blackFrameThreshold = 20;
 
   bool _scoring = false;
   bool _initialising = true;
@@ -119,6 +140,20 @@ class _CaptureScreenState extends State<CaptureScreen>
       await controller.initialize();
       if (!mounted) return;
       _controller = controller;
+
+      // Read the exposure compensation range once. Some devices report an empty
+      // range (min == max == 0), meaning exposure control is unavailable.
+      try {
+        _minExposure = await controller.getMinExposureOffset();
+        _maxExposure = await controller.getMaxExposureOffset();
+        _exposureSupported = _maxExposure > _minExposure;
+        _exposureOffset = 0.0;
+        await controller.setExposureOffset(0.0);
+      } catch (e) {
+        _exposureSupported = false;
+        debugPrint('Exposure control unavailable on this device. $e');
+      }
+
       setState(() => _initialising = false);
       await controller.startImageStream(_onFrame);
     } on CameraException catch (e) {
@@ -243,11 +278,69 @@ class _CaptureScreenState extends State<CaptureScreen>
       _stableFrames = g.ready ? _stableFrames + 1 : 0;
     });
 
+    _maybeApplyExposureHint(g.exposureHint);
+
     if (_autoCapture &&
         _stableFrames >= stableFramesNeeded &&
         !_capturing &&
         _step < ShotPlan.steps.length) {
       _capture(auto: true);
+    }
+  }
+
+  /// Applies the server's exposure hint (+1 brighten, -1 darken) as camera
+  /// exposure compensation, at most one step every [exposureStepInterval] so it
+  /// does not oscillate, kept within the device's supported range.
+  void _maybeApplyExposureHint(int hint) {
+    if (hint == 0 || !_exposureSupported) return;
+    final now = DateTime.now();
+    if (now.difference(_lastExposureStep) < exposureStepInterval) return;
+    final target = (_exposureOffset + hint * exposureStepEv)
+        .clamp(_minExposure, _maxExposure)
+        .toDouble();
+    if ((target - _exposureOffset).abs() < 0.001) return; // already at the limit
+    _lastExposureStep = now;
+    _setExposure(target);
+  }
+
+  /// Sets the camera exposure compensation and updates the on-screen label.
+  Future<void> _setExposure(double offset) async {
+    final c = _controller;
+    if (c == null || !_exposureSupported) return;
+    final clamped = offset.clamp(_minExposure, _maxExposure).toDouble();
+    try {
+      await c.setExposureOffset(clamped);
+      if (mounted) setState(() => _exposureOffset = clamped);
+    } catch (e) {
+      debugPrint('setExposureOffset failed. $e');
+    }
+  }
+
+  /// Resets exposure to neutral, used when moving to the next shot so each shot
+  /// starts from the camera's own metering.
+  void _resetExposure() {
+    if (!_exposureSupported) return;
+    _lastExposureStep = DateTime.fromMillisecondsSinceEpoch(0);
+    _setExposure(0.0);
+  }
+
+  /// Mean brightness (0..255) of a small thumbnail of the captured JPEG, or
+  /// null if it cannot be decoded. Used to catch a completely black frame.
+  double? _meanBrightness(Uint8List jpeg) {
+    try {
+      final decoded = img.decodeImage(jpeg);
+      if (decoded == null) return null;
+      final thumb = img.copyResize(decoded, width: 32);
+      var sum = 0.0;
+      var n = 0;
+      for (final p in thumb) {
+        sum += img.getLuminance(p);
+        n++;
+      }
+      return n == 0 ? null : sum / n;
+    } catch (e) {
+      debugPrint('Brightness check failed. $e');
+      return null;
     }
   }
 
@@ -288,7 +381,32 @@ class _CaptureScreenState extends State<CaptureScreen>
         file = await controller.takePicture();
       }
 
-      final bytes = await file.readAsBytes();
+      var bytes = await file.readAsBytes();
+
+      // Black frame guard. A capture sometimes comes back completely black.
+      // Never send a black frame for scoring: retry once, then warn and stop.
+      final b1 = _meanBrightness(bytes);
+      if (b1 != null && b1 < blackFrameThreshold) {
+        debugPrint('Captured frame is black (mean $b1). Retrying once.');
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        try {
+          final retry = await controller.takePicture();
+          bytes = await retry.readAsBytes();
+        } catch (e) {
+          debugPrint('Black-frame retry capture failed. $e');
+        }
+        final b2 = _meanBrightness(bytes);
+        if (b2 != null && b2 < blackFrameThreshold) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('The photo came out black. Check nothing is '
+                    'covering the camera and try again.')));
+          }
+          if (mounted) await controller.startImageStream(_onFrame);
+          return; // never add a black frame to the set
+        }
+      }
+
       if (!mounted) return;
 
       setState(() {
@@ -309,6 +427,9 @@ class _CaptureScreenState extends State<CaptureScreen>
             _guidance = GuidanceResult.empty();
           }
         });
+        // Each shot starts from neutral exposure; the next grey background will
+        // raise it again on its own.
+        _resetExposure();
       });
 
       if (mounted) await controller.startImageStream(_onFrame);
@@ -469,6 +590,7 @@ class _CaptureScreenState extends State<CaptureScreen>
                   autoCapture: _autoCapture,
                   onToggleAuto: () =>
                       setState(() => _autoCapture = !_autoCapture),
+                  onHelp: () => showHelpSheet(context),
                 ),
                 const SizedBox(height: 8),
                 _ShotProgress(captured: done),
@@ -484,6 +606,19 @@ class _CaptureScreenState extends State<CaptureScreen>
                   guidance: _guidance,
                   waitingForServer: _checkInFlight,
                 ),
+                if (_exposureSupported) ...[
+                  const SizedBox(height: 10),
+                  _BrightnessControl(
+                    offset: _exposureOffset,
+                    min: _minExposure,
+                    max: _maxExposure,
+                    onChanged: (v) {
+                      // Pause the automatic stepping while the user adjusts.
+                      _lastExposureStep = DateTime.now();
+                      _setExposure(v);
+                    },
+                  ),
+                ],
                 const SizedBox(height: 18),
                 _Controls(
                   canUndo: done > 0,
@@ -542,15 +677,72 @@ class _CaptureScreenState extends State<CaptureScreen>
   }
 }
 
+/// Manual brightness (exposure compensation) slider, shown near the indicators.
+/// Photographers teach exactly this "slide the brightness up" step, so it is
+/// visible whenever the device supports exposure control. The same offset the
+/// automatic hint adjusts.
+class _BrightnessControl extends StatelessWidget {
+  final double offset;
+  final double min;
+  final double max;
+  final ValueChanged<double> onChanged;
+
+  const _BrightnessControl({
+    required this.offset,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final label = offset >= 0
+        ? '+${offset.toStringAsFixed(1)}'
+        : offset.toStringAsFixed(1);
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.only(left: 14, right: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.wb_sunny_outlined, color: Colors.white, size: 18),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 104,
+            child: Text('Brightness $label',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600)),
+          ),
+          Expanded(
+            child: Slider(
+              value: offset.clamp(min, max),
+              min: min,
+              max: max,
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _TopBar extends StatelessWidget {
   final String productName;
   final bool autoCapture;
   final VoidCallback onToggleAuto;
+  final VoidCallback onHelp;
 
   const _TopBar({
     required this.productName,
     required this.autoCapture,
     required this.onToggleAuto,
+    required this.onHelp,
   });
 
   @override
@@ -588,6 +780,19 @@ class _TopBar extends StatelessWidget {
                   style:
                       const TextStyle(color: Colors.white, fontSize: 12.5)),
             ]),
+          ),
+        ),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: onHelp,
+          child: Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              shape: BoxShape.circle,
+            ),
+            child:
+                const Icon(Icons.help_outline, color: Colors.white, size: 18),
           ),
         ),
       ]),
@@ -689,6 +894,21 @@ class _Briefing extends StatelessWidget {
     required this.onFinish,
   });
 
+  /// The example image for a shot type, or null for the optional extra shot.
+  /// The user replaces these placeholders with their own good lightbox photos.
+  String? _exampleAsset(String shotType) {
+    switch (shotType) {
+      case 'main':
+        return 'assets/examples/main.jpg';
+      case 'angle':
+        return 'assets/examples/angle.jpg';
+      case 'detail':
+        return 'assets/examples/detail.jpg';
+      default:
+        return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -722,6 +942,39 @@ class _Briefing extends StatelessWidget {
                 style: const TextStyle(
                     color: Colors.white, fontSize: 19, height: 1.45),
               ),
+              if (_exampleAsset(step.shotType) != null) ...[
+                const SizedBox(height: 18),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.asset(
+                        _exampleAsset(step.shotType)!,
+                        width: 104,
+                        height: 130,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                            width: 104,
+                            height: 130,
+                            color: Colors.white24,
+                            child: const Icon(Icons.image_outlined,
+                                color: Colors.white54)),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Text(
+                        'A good ${step.label.toLowerCase()} shot looks like this.',
+                        style: TextStyle(
+                            color: Colors.white.withOpacity(0.7),
+                            fontSize: 13.5,
+                            height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 18),
               Container(
                 padding: const EdgeInsets.all(15),

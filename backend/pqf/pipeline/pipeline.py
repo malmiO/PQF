@@ -105,7 +105,13 @@ def score_image(image_bytes: bytes, path: str | None = None,
 
     # Technical hard reject. Stop here, no semantic call, which also saves quota.
     if tech.hard_reject:
-        return _attach(decide_image(tech.tqs, 0.0, {}), path)
+        d = decide_image(tech.tqs, 0.0, {})
+        # Keep the per criterion technical scores so a hard-rejected image can
+        # still report its weakest technical criterion (2026-10-05). Without
+        # this the batch had no scores to explain the rejection, so the app
+        # showed "Retake this one" with no reason.
+        setattr(d, "technical_scores", tech.scores)
+        return _attach(d, path)
 
     # Semantic evaluator.
     from ..semantic import evaluate_semantic

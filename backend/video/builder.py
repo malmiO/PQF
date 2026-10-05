@@ -55,8 +55,46 @@ class VideoResult:
     has_audio: bool
 
 
+def ffmpeg_binary() -> str | None:
+    """Resolve the ffmpeg executable independent of the shell PATH.
+
+    Order: the PQF_FFMPEG environment variable (an absolute path), then PATH,
+    then the known Windows winget install locations. A server launched from a
+    shell that was opened BEFORE ffmpeg was installed does not have it on PATH,
+    so relying on PATH alone reported video as unavailable even though ffmpeg
+    was installed (found 2026-10-05). Returns None if ffmpeg cannot be found.
+    """
+    import os
+    import glob
+
+    env = os.environ.get("PQF_FFMPEG")
+    if env and os.path.isfile(env):
+        return env
+
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+
+    # Windows: winget installs ffmpeg under LOCALAPPDATA. Prefer the real
+    # executable in Packages over the Links shim, which is an execution alias a
+    # subprocess may not be able to run.
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        for pattern in (
+            os.path.join(local, "Microsoft", "WinGet", "Packages",
+                         "*FFmpeg*", "**", "bin", "ffmpeg.exe"),
+            os.path.join(local, "Microsoft", "WinGet", "Packages",
+                         "*FFmpeg*", "**", "ffmpeg.exe"),
+            os.path.join(local, "Microsoft", "WinGet", "Links", "ffmpeg.exe"),
+        ):
+            hits = glob.glob(pattern, recursive=True)
+            if hits:
+                return hits[0]
+    return None
+
+
 def ffmpeg_available() -> bool:
-    return shutil.which("ffmpeg") is not None
+    return ffmpeg_binary() is not None
 
 
 def order_by_role(decisions: list) -> list:
@@ -74,8 +112,29 @@ def order_by_role(decisions: list) -> list:
     return ordered
 
 
-def _pad_filter(w: int, h: int) -> str:
-    """Scale to fit, then pad to the exact frame on white.
+def background_colour(image_path) -> str:
+    """The photograph's own background colour, as 0xRRGGBB for ffmpeg.
+
+    Estimated as the median of the border band, the same estimate the framework
+    uses to find the product. Padding with it makes the bars invisible on any
+    plain background; padding with pure white showed visible bands on the light
+    grey background of a budget lightbox (2026-10-05). Falls back to white.
+    """
+    import cv2
+    import numpy as np
+    img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if img is None:
+        return "white"
+    h, w = img.shape[:2]
+    b = max(2, int(min(h, w) * 0.05))
+    border = np.concatenate([img[:b].reshape(-1, 3), img[-b:].reshape(-1, 3),
+                             img[:, :b].reshape(-1, 3), img[:, -b:].reshape(-1, 3)])
+    bgr = np.median(border, axis=0).astype(int)
+    return "0x%02X%02X%02X" % (bgr[2], bgr[1], bgr[0])
+
+
+def _pad_filter(w: int, h: int, colour: str = "white") -> str:
+    """Scale to fit, then pad to the exact frame in the photo's background colour.
 
     Preserving aspect ratio matters. Stretching a product photograph to fill a
     frame distorts the product, which is precisely the kind of misrepresentation
@@ -83,7 +142,7 @@ def _pad_filter(w: int, h: int) -> str:
     """
     return (
         f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
-        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:white"
+        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:{colour}"
     )
 
 
@@ -124,7 +183,7 @@ def build_video(
     w, h = FORMATS.get(format_name, FORMATS["square"])
     per_frames = int(SECONDS_PER_IMAGE * FPS)
 
-    cmd: list[str] = ["ffmpeg", "-y", "-loglevel", "error"]
+    cmd: list[str] = [ffmpeg_binary() or "ffmpeg", "-y", "-loglevel", "error"]
     for p in image_paths:
         if motion:
             # A SINGLE frame is fed in, and zoompan produces the whole duration
@@ -140,7 +199,7 @@ def build_video(
     # Per image chain, then crossfade the results together.
     parts = []
     for i in range(len(image_paths)):
-        chain = _pad_filter(w, h)
+        chain = _pad_filter(w, h, background_colour(image_paths[i]))
         if motion:
             chain += "," + _ken_burns(w, h, per_frames, zoom_in=(i % 2 == 0))
         chain += f",setsar=1,fps={FPS}"
@@ -162,8 +221,13 @@ def build_video(
 
     cmd += ["-filter_complex", ";".join(parts), "-map", "[vout]"]
 
+    n_img = len(image_paths)
+    total = n_img * SECONDS_PER_IMAGE - (n_img - 1) * CROSSFADE_SECONDS
     if audio_path is not None:
+        # Fade the music out over the last second rather than cutting it off.
+        fade_start = max(0.0, total - 1.0)
         cmd += ["-map", f"{len(image_paths)}:a", "-shortest",
+                "-af", f"afade=t=in:st=0:d=0.5,afade=t=out:st={fade_start:.2f}:d=1",
                 "-c:a", "aac", "-b:a", "128k"]
 
     cmd += [

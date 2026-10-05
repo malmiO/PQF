@@ -60,8 +60,10 @@ class ApiConfig {
   }
 
   /// How often a live guidance frame is sent. Raise if the preview stutters.
+  /// The floor is 500 ms so frames are never sent faster than that (combined
+  /// with the single in-flight guard, this bounds the camera's memory churn).
   static Duration get guidanceInterval =>
-      Duration(milliseconds: _int('PQF_GUIDANCE_INTERVAL_MS', 700, 200, 3000));
+      Duration(milliseconds: _int('PQF_GUIDANCE_INTERVAL_MS', 700, 500, 3000));
 
   /// Abandon a guidance frame after this long. A dropped frame is harmless.
   static Duration get guidanceTimeout =>
@@ -70,6 +72,11 @@ class ApiConfig {
   /// Batch scoring calls the semantic model once per image, so allow plenty.
   static Duration get batchTimeout =>
       Duration(milliseconds: _int('PQF_BATCH_TIMEOUT_MS', 180000, 30000, 600000));
+
+  /// Video assembly runs ffmpeg on the server, which takes several seconds per
+  /// image. At least 120 seconds, so a larger set does not time out.
+  static Duration get videoTimeout =>
+      Duration(milliseconds: _int('PQF_VIDEO_TIMEOUT_MS', 180000, 120000, 600000));
 
   /// Shown on the home screen so the configured target is visible at a glance.
   static String get displayTarget {
