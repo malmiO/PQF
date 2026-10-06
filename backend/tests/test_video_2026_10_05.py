@@ -58,5 +58,8 @@ def test_health_reports_video_readiness():
     h = client.get("/health").json()
     assert isinstance(h.get("video_ready"), bool)
     assert h["video_ready"] == ffmpeg_available()
-    assert isinstance(h.get("music_tracks"), int)
-    assert h["music_tracks"] >= 0
+    # v1.1.0: per mood, plus whether test tones are still installed
+    assert isinstance(h.get("music_tracks"), dict)
+    assert set(h["music_tracks"]) == {"calm", "elegant", "upbeat"}
+    assert all(isinstance(v, int) and v >= 0 for v in h["music_tracks"].values())
+    assert isinstance(h.get("test_tones"), bool)

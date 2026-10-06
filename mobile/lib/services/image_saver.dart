@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -9,7 +10,8 @@ import 'package:share_plus/share_plus.dart';
 
 import '../services/pqf_api.dart';
 
-/// Saves the certified image set to the phone.
+/// Saves a finished product (the certified set, its video, caption and
+/// results) to the phone.
 ///
 /// WHY THIS OUTPUT EXISTS. Expert consultation established that sellers
 /// repeatedly need to send individual images to customers during a conversation,
@@ -22,116 +24,157 @@ import '../services/pqf_api.dart';
 /// opening anything, which is the difference between a usable set and four
 /// similar looking files.
 ///
-/// WHY ONLY ACCEPTED IMAGES ARE SAVED. Saving rejected images alongside accepted
-/// ones would undermine the point of certifying them. The user is told plainly
-/// how many were saved and how many were left out.
+/// WHY ONLY THE SET IS SAVED. Saving rejected or unused images alongside the set
+/// would undermine the point of certifying it.
 class ImageSaver {
-  /// Outcome of an attempt to save.
-  static const String methodGallery = 'gallery';
-  static const String methodShare = 'share';
-
-  /// Saves the accepted images, named by product and role.
+  /// Saves everything for one finished product into
+  /// `PQF/<name>_<yyyyMMdd_HHmm>/`: ONLY the set photos (1_main.jpg,
+  /// 2_angle.jpg, ...), promo_video.mp4, caption.txt and results.json
+  /// (2026-10-06).
   ///
-  /// Tries the gallery first. If that is refused or unavailable, falls back to
-  /// writing temporary files and opening the system share sheet, which needs no
-  /// permission and still lets the seller send the images to a customer.
-  static Future<SaveOutcome> save({
-    required String productName,
-    required BatchResult result,
-    required List<Uint8List> images,
+  /// Photos and the video go through the gallery (`Pictures/PQF/<folder>`).
+  /// The two text files are written next to them where Android allows it (up
+  /// to Android 10, with the storage permission the gallery step asks for); on
+  /// newer Android they go to the app's own folder, and the outcome says where.
+  /// Gallery refused or unavailable: the files are offered through the share
+  /// sheet instead, which needs no permission.
+  static Future<PackageSaveOutcome> saveProduct({
+    required ProductDraft draft,
+    required List<SetPhoto> set,
+    required String videoPath,
+    required VideoPlan plan,
   }) async {
-    final items = <_NamedImage>[];
-    final counts = <String, int>{};
+    final now = DateTime.now();
+    final folder = '${_folderName(draft.name)}_${_stamp(now)}';
+    final album = 'PQF/$folder';
 
-    for (final selected in result.selected) {
-      if (!selected.passed) continue;
-      if (selected.index < 0 || selected.index >= images.length) continue;
-
-      final role = _roleSlug(selected.role);
-      counts[role] = (counts[role] ?? 0) + 1;
-      final suffix = counts[role]! > 1 ? '_${counts[role]}' : '';
-      items.add(_NamedImage(
-        name: '${_slug(productName)}_$role$suffix.jpg',
-        bytes: _cropForSave(images[selected.index]),
-      ));
-    }
-
-    if (items.isEmpty) {
-      return SaveOutcome(
-        saved: 0,
-        excluded: images.length,
-        method: methodGallery,
-        error: 'None of these photos passed the quality check yet.',
-      );
-    }
-
-    final excluded = images.length - items.length;
-
-    // Preferred path, the gallery.
+    // Stage every file under its final name; gal keeps the file name.
+    final List<File> photos = [];
+    late final File video;
+    late final File caption;
+    late final File results;
     try {
-      final hasAccess = await Gal.hasAccess(toAlbum: true);
-      if (!hasAccess) {
-        final granted = await Gal.requestAccess(toAlbum: true);
-        if (!granted) {
-          return _shareFallback(items, excluded,
-              reason: 'Permission to save to your photos was not granted.');
-        }
+      final tmp = Directory(
+          '${(await getTemporaryDirectory()).path}/pqf_save/$folder');
+      await tmp.create(recursive: true);
+      final setJson = <Map<String, dynamic>>[];
+      for (var i = 0; i < set.length; i++) {
+        final name = '${i + 1}_${set[i].roleSlug}.jpg';
+        final f = File('${tmp.path}/$name');
+        await f.writeAsBytes(_cropForSave(set[i].bytes), flush: true);
+        photos.add(f);
+        setJson.add({'file': name, 'role': set[i].role, 'fqs': set[i].fqs});
       }
-
-      final album = _slug(productName);
-      final dir = await getTemporaryDirectory();
-      for (final item in items) {
-        final f = File('${dir.path}/${item.name}');
-        await f.writeAsBytes(item.bytes, flush: true);
-        await Gal.putImage(f.path, album: album);
-      }
-
-      return SaveOutcome(
-        saved: items.length,
-        excluded: excluded,
-        method: methodGallery,
-        albumName: album,
+      video = await File(videoPath).copy('${tmp.path}/promo_video.mp4');
+      caption = File('${tmp.path}/caption.txt');
+      await caption.writeAsString(plan.caption, flush: true);
+      results = File('${tmp.path}/results.json');
+      await results.writeAsString(
+        const JsonEncoder.withIndent('  ').convert({
+          'product': draft.toJson(),
+          'saved_at': now.toIso8601String(),
+          'certified': true,
+          'set': setJson,
+          'plan': plan.raw,
+        }),
+        flush: true,
       );
     } catch (e) {
+      debugPrint('Preparing the files to save failed. $e');
+      return PackageSaveOutcome(
+          folder: album, error: 'Could not prepare the files to save. $e');
+    }
+    final all = [...photos, video, caption, results];
+
+    try {
+      final hasAccess = await Gal.hasAccess(toAlbum: true);
+      if (!hasAccess && !await Gal.requestAccess(toAlbum: true)) {
+        return await _sharePackage(all, album,
+            reason: 'Permission to save to your photos was not granted.');
+      }
+      for (final p in photos) {
+        await Gal.putImage(p.path, album: album);
+      }
+      await Gal.putVideo(video.path, album: album);
+    } catch (e) {
       debugPrint('Gallery save failed, falling back to share. $e');
-      return _shareFallback(items, excluded,
+      return _sharePackage(all, album,
           reason: 'Saving to your photos did not work on this phone.');
+    }
+
+    // The text files: into the same folder if Android allows it.
+    try {
+      final dir = Directory('${await _sharedRoot()}/Pictures/$album');
+      await dir.create(recursive: true);
+      await caption.copy('${dir.path}/caption.txt');
+      await results.copy('${dir.path}/results.json');
+      return PackageSaveOutcome(folder: album, saved: true);
+    } catch (e) {
+      debugPrint('Shared folder not writable for text files ($e). '
+          'Using the app folder.');
+    }
+    try {
+      final base = await getExternalStorageDirectory() ??
+          await getApplicationDocumentsDirectory();
+      final dir = Directory('${base.path}/$album');
+      await dir.create(recursive: true);
+      await caption.copy('${dir.path}/caption.txt');
+      await results.copy('${dir.path}/results.json');
+      return PackageSaveOutcome(
+        folder: album,
+        saved: true,
+        note: 'This Android version keeps caption.txt and results.json out of '
+            'the photo folder. They are in ${dir.path}.',
+      );
+    } catch (e) {
+      return PackageSaveOutcome(
+        folder: album,
+        error: 'The photos and video were saved, but caption.txt and '
+            'results.json could not be. $e',
+      );
     }
   }
 
-  /// Writes the images to temporary files and opens the share sheet.
-  ///
-  /// This needs no storage permission at all, which is why it is the fallback.
-  /// The seller can send the set straight to a customer, or save it from the
-  /// share sheet if they prefer.
-  static Future<SaveOutcome> _shareFallback(
-    List<_NamedImage> items,
-    int excluded, {
+  static Future<PackageSaveOutcome> _sharePackage(
+    List<File> files,
+    String album, {
     required String reason,
   }) async {
     try {
-      final dir = await getTemporaryDirectory();
-      final files = <XFile>[];
-      for (final item in items) {
-        final f = File('${dir.path}/${item.name}');
-        await f.writeAsBytes(item.bytes, flush: true);
-        files.add(XFile(f.path));
-      }
-      await Share.shareXFiles(files, subject: 'Product photos');
-      return SaveOutcome(
-        saved: items.length,
-        excluded: excluded,
-        method: methodShare,
-        note: reason,
-      );
+      await SharePlus.instance.share(ShareParams(
+          files: files.map((f) => XFile(f.path)).toList(),
+          subject: 'Product photos and video'));
+      return PackageSaveOutcome(folder: album, shared: true, error: reason);
     } catch (e) {
-      return SaveOutcome(
-        saved: 0,
-        excluded: excluded,
-        method: methodShare,
-        error: 'Could not save or share the photos. $e',
-      );
+      return PackageSaveOutcome(
+          folder: album, error: '$reason Sharing did not work either. $e');
     }
+  }
+
+  /// The root of shared storage (/storage/emulated/0), from the app's own
+  /// external folder, which sits under `<root>/Android/data/<package>/files`.
+  static Future<String> _sharedRoot() async {
+    final ext = await getExternalStorageDirectory();
+    if (ext == null) throw const FileSystemException('No external storage.');
+    final i = ext.path.indexOf('/Android/');
+    if (i < 0) throw FileSystemException('Unexpected path', ext.path);
+    return ext.path.substring(0, i);
+  }
+
+  /// The product name as a folder name: letters and digits kept, case kept,
+  /// everything else becomes "_".
+  static String _folderName(String s) {
+    final cleaned = s
+        .trim()
+        .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return cleaned.isEmpty ? 'Product' : cleaned;
+  }
+
+  /// yyyyMMdd_HHmm
+  static String _stamp(DateTime t) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${t.year}${two(t.month)}${two(t.day)}_${two(t.hour)}${two(t.minute)}';
   }
 
   /// Centre crop the SAVED copy to 4:5 (full width) when the photo is taller
@@ -161,71 +204,32 @@ class ImageSaver {
     }
   }
 
-  /// Role names the seller understands, used in the filename.
-  static String _roleSlug(String role) {
-    switch (role) {
-      case 'hero_shot':
-        return 'main';
-      case 'angle_shot':
-        return 'angle';
-      case 'detail_shot':
-        return 'detail';
-      default:
-        return 'extra';
-    }
-  }
-
-  /// Filename safe version of the product name.
-  static String _slug(String s) {
-    final cleaned = s
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
-        .replaceAll(RegExp(r'^_+|_+$'), '');
-    return cleaned.isEmpty ? 'product' : cleaned;
-  }
 }
 
-class _NamedImage {
-  final String name;
-  final Uint8List bytes;
+/// What happened when a finished product was saved.
+class PackageSaveOutcome {
+  /// `PQF/<name>_<yyyyMMdd_HHmm>`
+  final String folder;
 
-  _NamedImage({required this.name, required this.bytes});
-}
+  /// Everything is on the phone.
+  final bool saved;
 
-class SaveOutcome {
-  final int saved;
-  final int excluded;
-  final String method;
-  final String? albumName;
+  /// Not saved, but the share sheet was opened with the files instead.
+  final bool shared;
+
+  /// Where some files went instead, when that differs from [folder].
   final String? note;
+
+  /// Why saving failed, in plain words.
   final String? error;
 
-  SaveOutcome({
-    required this.saved,
-    required this.excluded,
-    required this.method,
-    this.albumName,
+  PackageSaveOutcome({
+    required this.folder,
+    this.saved = false,
+    this.shared = false,
     this.note,
     this.error,
   });
 
-  bool get ok => saved > 0 && error == null;
-
-  /// What the user is told afterwards, in their terms rather than the app's.
-  String get message {
-    if (error != null) return error!;
-    final where = method == ImageSaver.methodGallery
-        ? (albumName == null
-            ? 'in your photos'
-            : 'in your photos, in an album called $albumName')
-        : 'ready to send';
-    final base = saved == 1
-        ? 'One photo is $where.'
-        : '$saved photos are $where.';
-    if (excluded > 0) {
-      return '$base ${excluded == 1 ? "One photo was" : "$excluded photos were"} '
-          'left out because they did not meet the standard.';
-    }
-    return base;
-  }
+  bool get ok => saved && error == null;
 }

@@ -78,6 +78,28 @@ class ApiConfig {
   static Duration get videoTimeout =>
       Duration(milliseconds: _int('PQF_VIDEO_TIMEOUT_MS', 180000, 120000, 600000));
 
+  /// POST /video/plan uploads the set and asks the model once where the
+  /// features are, so allow up to a minute.
+  static Duration get videoPlanTimeout =>
+      Duration(milliseconds: _int('PQF_VIDEO_PLAN_TIMEOUT_MS', 60000, 30000, 300000));
+
+  /// The 4 digit PIN that opens study mode (PQF_STUDY_PIN). Null, or anything
+  /// that is not 4 digits, means study mode cannot be opened.
+  static String? get studyPin {
+    final v = _get('PQF_STUDY_PIN');
+    return (v != null && RegExp(r'^\d{4}$').hasMatch(v)) ? v : null;
+  }
+
+  /// Shared token for a deployed server (PQF_API_TOKEN), sent as X-PQF-Token.
+  /// The server only checks it when its own PQF_API_TOKEN is set.
+  static String? get apiToken => _get('PQF_API_TOKEN');
+
+  /// Headers every request carries.
+  static Map<String, String> get authHeaders {
+    final t = apiToken;
+    return t == null ? const {} : {'X-PQF-Token': t};
+  }
+
   /// Shown on the home screen so the configured target is visible at a glance.
   static String get displayTarget {
     final u = Uri.tryParse(baseUrl);

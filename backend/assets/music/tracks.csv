@@ -1,8 +1,0 @@
-id,title,mood,filename,attribution
-calm_01,Gentle Morning,calm,calm_01.mp3,"REPLACE with the real title, source and licence"
-calm_02,Soft Light,calm,calm_02.mp3,"REPLACE with the real title, source and licence"
-upbeat_01,Bright Day,upbeat,upbeat_01.mp3,"REPLACE with the real title, source and licence"
-upbeat_02,Easy Move,upbeat,upbeat_02.mp3,"REPLACE with the real title, source and licence"
-elegant_01,Quiet Luxury,elegant,elegant_01.mp3,"REPLACE with the real title, source and licence"
-test_calm,TEST TONE - remove before demo,calm,test_calm.mp3,"test only, not music"
-test_upbeat,TEST TONE - remove before demo,upbeat,test_upbeat.mp3,"test only, not music"

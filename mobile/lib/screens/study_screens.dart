@@ -1,0 +1,270 @@
+import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
+
+import '../config/api_config.dart';
+import '../models/study_session.dart';
+import '../services/study_log.dart';
+import 'product_form_screen.dart';
+
+/// Opens study mode after the PIN (PQF_STUDY_PIN in config.env). Hidden: reached
+/// only by a long press on the home screen title, so participants never see it.
+Future<void> openStudyMode(BuildContext context) async {
+  final pin = ApiConfig.studyPin;
+  if (pin == null) {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Study mode is not set up (PQF_STUDY_PIN in config.env).')));
+    return;
+  }
+  final controller = TextEditingController();
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Study mode'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        obscureText: true,
+        maxLength: 4,
+        keyboardType: TextInputType.number,
+        decoration: const InputDecoration(labelText: 'PIN'),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text == pin),
+            child: const Text('Open')),
+      ],
+    ),
+  );
+  controller.dispose();
+  if (!context.mounted || ok == null) return;
+  if (!ok) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Wrong PIN.')));
+    return;
+  }
+  Navigator.of(context)
+      .push(MaterialPageRoute(builder: (_) => const StudyStartScreen()));
+}
+
+/// Start of a session: participant code, product code and session number. The
+/// condition comes from the counterbalanced (ABBA) order, shown on screen.
+class StudyStartScreen extends StatefulWidget {
+  const StudyStartScreen({super.key});
+
+  @override
+  State<StudyStartScreen> createState() => _StudyStartScreenState();
+}
+
+class _StudyStartScreenState extends State<StudyStartScreen> {
+  final _participant = TextEditingController(text: 'P');
+  final _product = TextEditingController();
+  int _session = 1;
+
+  @override
+  void dispose() {
+    _participant.dispose();
+    _product.dispose();
+    super.dispose();
+  }
+
+  bool get _valid =>
+      StudySession.participantPattern.hasMatch(_participant.text.trim()) &&
+      StudySession.productPattern.hasMatch(_product.text.trim());
+
+  Future<void> _start() async {
+    final s = StudySession(
+      participant: _participant.text.trim(),
+      product: _product.text.trim(),
+      session: _session,
+    );
+    StudySession.current = s;
+    await StudyLog.log('session_start');
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const ProductFormScreen()));
+  }
+
+  void _end() {
+    StudySession.current = null;
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final code = _participant.text.trim();
+    final order = StudySession.participantPattern.hasMatch(code)
+        ? StudySession.abbaOrder(code)
+        : null;
+    final active = StudySession.current;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Study session')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          if (active != null) ...[
+            Card(
+              child: ListTile(
+                title: Text('Running: ${active.participant}, session '
+                    '${active.session}, ${active.condition}'),
+                trailing: TextButton(onPressed: _end, child: const Text('End')),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          const Text('Codes only. Never enter a name or contact details.',
+              style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _participant,
+            textCapitalization: TextCapitalization.characters,
+            decoration: const InputDecoration(
+                labelText: 'Participant code', hintText: 'P01',
+                border: OutlineInputBorder()),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _product,
+            decoration: const InputDecoration(
+                labelText: 'Product code', hintText: 'K1',
+                border: OutlineInputBorder()),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 18),
+          if (order != null) ...[
+            Text('Order for $code: 1. ${order[0]}   2. ${order[1]}',
+                style: const TextStyle(fontSize: 15.5)),
+            const SizedBox(height: 10),
+            SegmentedButton<int>(
+              segments: [
+                ButtonSegment(value: 1, label: Text('Session 1: ${order[0]}')),
+                ButtonSegment(value: 2, label: Text('Session 2: ${order[1]}')),
+              ],
+              selected: {_session},
+              onSelectionChanged: (v) => setState(() => _session = v.first),
+            ),
+          ],
+          const SizedBox(height: 24),
+          FilledButton(
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+            onPressed: _valid ? _start : null,
+            child: const Text('Start session'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The participant chooses their own main, angle 1, angle 2 and detail BEFORE
+/// the framework's results are shown. Returns slot -> photo, or null if left.
+class OwnPicksScreen extends StatefulWidget {
+  final List<Uint8List> photos;
+
+  const OwnPicksScreen({super.key, required this.photos});
+
+  @override
+  State<OwnPicksScreen> createState() => _OwnPicksScreenState();
+}
+
+class _OwnPicksScreenState extends State<OwnPicksScreen> {
+  static const slots = [
+    ('main', 'Main'),
+    ('angle1', 'Angle 1'),
+    ('angle2', 'Angle 2'),
+    ('detail', 'Detail'),
+  ];
+  final Map<String, int> _picks = {};
+  String _slot = 'main';
+
+  void _pick(int i) {
+    setState(() {
+      _picks.removeWhere((_, v) => v == i);   // one photo, one slot
+      _picks[_slot] = i;
+      final next = slots.map((s) => s.$1).where((s) => !_picks.containsKey(s));
+      if (next.isNotEmpty) _slot = next.first;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final done = _picks.length == slots.length;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Your choice')),
+      body: Column(
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
+            child: Text(
+                'Which photos would you use? Choose one for each: tap a box, '
+                'then tap a photo.',
+                style: TextStyle(fontSize: 15, height: 1.35)),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Wrap(
+              spacing: 8,
+              children: [
+                for (final (key, label) in slots)
+                  ChoiceChip(
+                    label: Text(_picks.containsKey(key)
+                        ? '$label: photo ${_picks[key]! + 1}'
+                        : label),
+                    selected: _slot == key,
+                    onSelected: (_) => setState(() => _slot = key),
+                  ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: GridView.builder(
+              padding: const EdgeInsets.all(12),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3, crossAxisSpacing: 8, mainAxisSpacing: 8),
+              itemCount: widget.photos.length,
+              itemBuilder: (_, i) {
+                final slot = _picks.entries
+                    .where((e) => e.value == i)
+                    .map((e) => slots.firstWhere((s) => s.$1 == e.key).$2)
+                    .firstOrNull;
+                return GestureDetector(
+                  onTap: () => _pick(i),
+                  child: Stack(fit: StackFit.expand, children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.memory(widget.photos[i],
+                          fit: BoxFit.cover, cacheWidth: 300),
+                    ),
+                    Positioned(
+                      left: 4,
+                      top: 4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        color: slot == null ? Colors.black54 : const Color(0xFF1F3A63),
+                        child: Text(slot ?? 'Photo ${i + 1}',
+                            style: const TextStyle(color: Colors.white, fontSize: 12)),
+                      ),
+                    ),
+                  ]),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+            child: FilledButton(
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+              onPressed: done
+                  ? () => Navigator.of(context).pop(
+                      _picks.map((k, v) => MapEntry(k, widget.photos[v])))
+                  : null,
+              child: const Text('Done'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

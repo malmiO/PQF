@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import '../models/product_draft.dart';
+import '../models/study_session.dart';
 import '../widgets/preflight_dialog.dart';
+import '../widgets/help_sheet.dart';
 import 'capture_screen.dart';
 import 'upload_screen.dart';
 
@@ -13,14 +16,15 @@ import 'upload_screen.dart';
 /// The upload path also exercises the whole framework without involving the
 /// camera at all, which makes the standard easy to demonstrate and to test.
 class ModeScreen extends StatelessWidget {
-  final String productName;
+  final ProductDraft draft;
 
-  const ModeScreen({super.key, required this.productName});
+  const ModeScreen({super.key, required this.draft});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(productName)),
+      appBar: AppBar(title: Text(draft.name),
+          actions: const [HelpButton(HelpTopic.mode)]),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(22),
@@ -40,7 +44,7 @@ class ModeScreen extends StatelessWidget {
               const SizedBox(height: 26),
               _ModeCard(
                 icon: Icons.camera_alt,
-                title: 'Take photos now',
+                title: 'Take photos with guidance',
                 subtitle: 'Guided, one shot at a time',
                 detail: 'The app explains each shot before you take it, then '
                     'checks the camera live and tells you what to fix. It can '
@@ -53,10 +57,12 @@ class ModeScreen extends StatelessWidget {
                   final ready = await PreflightDialog.show(context);
                   if (!ready || !context.mounted) return;
                   Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => CaptureScreen(productName: productName),
+                    builder: (_) => CaptureScreen(draft: draft),
                   ));
                 },
               ),
+              // The study compares camera conditions only (v1.1.0).
+              if (StudySession.current == null) ...[
               const SizedBox(height: 16),
               _ModeCard(
                 icon: Icons.photo_library_outlined,
@@ -67,9 +73,10 @@ class ModeScreen extends StatelessWidget {
                     'good enough, what each is useful for, and what to retake.',
                 accent: const Color(0xFF2E7D32),
                 onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => UploadScreen(productName: productName),
+                  builder: (_) => UploadScreen(draft: draft),
                 )),
               ),
+              ],
             ],
           ),
         ),

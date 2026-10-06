@@ -93,6 +93,16 @@ GREY_BACKGROUND_MSG = ("The background looks grey. Raise the brightness: tap the
 # rules are unchanged. A detail shot is a close up: the product legitimately fills
 # the frame and touches its edges, so the main shot bounds would block it forever.
 # (min product area, max product area, product may touch the edges)
+# Auto zoom (v1.1.0). The size each shot type is zoomed towards, as the share of
+# the scored region the product covers: the middle of its allowed range, so the
+# zoom stops well inside it rather than at the edge. Design prior.
+GUIDANCE_ZOOM_TARGET_AREA = {"main": 0.32, "angle": 0.32, "extra": 0.32, "detail": 0.55}
+# Zoom never pushes the product closer than this to the frame edge (share of the
+# half width / half height from the centre).
+GUIDANCE_ZOOM_EDGE_LIMIT = 0.92
+# A hint smaller than this change is not worth acting on (dead band).
+GUIDANCE_ZOOM_MIN_STEP = 0.08
+
 GUIDANCE_SHOT_FRAMING = {
     "main":   (GUIDANCE_MIN_PRODUCT_AREA, GUIDANCE_MAX_PRODUCT_AREA, False),
     "angle":  (GUIDANCE_MIN_PRODUCT_AREA, GUIDANCE_MAX_PRODUCT_AREA, False),
@@ -184,6 +194,10 @@ class GuidanceResponse(BaseModel):
     # +1 means "raise the brightness", -1 "lower it", 0 no change. Lets the app
     # adjust exposure compensation itself, the step a photographer does by hand.
     exposure_hint: int = 0
+    # Auto zoom (v1.1.0): the zoom factor to apply ON TOP of the current zoom so
+    # the product reaches its target size (1.0 = leave it). Measured on the frame
+    # as the camera sends it, so it is always relative to the current zoom.
+    zoom_hint: float = 1.0
 
 
 class BatchImageResult(BaseModel):
@@ -205,6 +219,8 @@ class BatchResponse(BaseModel):
     role_sets: dict
     recapture: dict | None
     elapsed_ms: int
+    images: list = []       # every photo: chosen or not, and why (2026-10-06)
+    missing: list = []      # shots still to take: [{role, count, message}]
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +337,7 @@ def _shape(d: ImageDecision) -> tuple[list, list, list]:
 
 
 def _framing_check(img, T, min_area: float = None, max_area: float = None,
-                   allow_edges: bool = False) -> tuple[float, str]:
+                   allow_edges: bool = False, info: dict | None = None) -> tuple[float, str]:
     """Cheap composition check for live guidance.
 
     Returns a score and, when it fails, the single most useful instruction.
@@ -340,6 +356,9 @@ def _framing_check(img, T, min_area: float = None, max_area: float = None,
 
     This is a guidance proxy, not a framework criterion. Composition is scored
     properly by the semantic evaluator after capture.
+
+    `info`, if given, receives what was measured (area, the product's extent
+    from the centre, whether it is cut off), for the auto zoom hint (v1.1.0).
     """
     import numpy as np
     import cv2
@@ -388,11 +407,19 @@ def _framing_check(img, T, min_area: float = None, max_area: float = None,
         return 0.0, "Point the camera at your product."
     top, bottom = np.where(rows)[0][[0, -1]]
     left, right = np.where(cols)[0][[0, -1]]
+    if info is not None:
+        # how far the product reaches from the centre, as a share of half the
+        # frame (1.0 = touching the edge); zooming by k multiplies this by k
+        info["area"] = area
+        info["reach"] = max(abs(left / w - 0.5), abs((right + 1) / w - 0.5),
+                            abs(top / h - 0.5), abs((bottom + 1) / h - 0.5)) * 2.0
 
     # Cut off. A small margin avoids flagging a product that merely sits close
     # to the edge without crossing it.
     m = max(2, int(min(h, w) * 0.02))
     if not allow_edges and (top <= m or left <= m or bottom >= h - 1 - m or right >= w - 1 - m):
+        if info is not None:
+            info["cut_off"] = True
         return 0.10, "Part of the product is cut off. Move back a little."
 
     if area < min_area:
@@ -417,6 +444,29 @@ def _framing_check(img, T, min_area: float = None, max_area: float = None,
     return 1.0, ""
 
 
+def _zoom_hint(info: dict, shot: str, min_area: float, max_area: float) -> float:
+    """Zoom factor (relative to the current zoom) for the live auto zoom.
+
+    Acts only when the size is OUTSIDE the shot's allowed range, and then aims at
+    the middle of it, so the zoom does not hunt around a limit. Zooming in is
+    capped so the product never gets closer to an edge than
+    GUIDANCE_ZOOM_EDGE_LIMIT (zoom is about the centre, so an off centre product
+    would otherwise be pushed out of the frame). A cut off product asks for a
+    small zoom out; the app ignores that when it is already at its widest.
+    Never calls the model; computed from the framing check's own measurement.
+    """
+    if info.get("cut_off"):
+        return 0.85
+    area, reach = info.get("area"), info.get("reach")
+    if not area or not reach or min_area <= area <= max_area:
+        return 1.0
+    k = (GUIDANCE_ZOOM_TARGET_AREA.get(shot, 0.32) / area) ** 0.5   # area grows with k^2
+    if k > 1.0:
+        k = min(k, GUIDANCE_ZOOM_EDGE_LIMIT / reach)
+    k = max(0.5, min(2.0, k))
+    return 1.0 if abs(k - 1.0) < GUIDANCE_ZOOM_MIN_STEP else round(k, 3)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -427,10 +477,13 @@ def health():
     from pathlib import Path as _Path
     from ..video import audio as _A
     from ..video.builder import ffmpeg_available
+    # Per mood, and whether any generated test tone is still offered (v1.1.0).
+    _base = _Path(__file__).resolve().parents[2]
     try:
-        _music_tracks = len(_A.recommend(None, _Path(__file__).resolve().parents[2]).tracks)
+        _music_tracks = _A.tracks_per_mood(_base)
+        _test_tones = any(t.is_test_tone for t in _A.recommend(None, _base).tracks)
     except Exception:
-        _music_tracks = 0
+        _music_tracks, _test_tones = {m: 0 for m in _A.MOODS}, False
     return {
         "status": "ok",
         "framework_version": getattr(config, "SPEC_VERSION", "1.3"),
@@ -442,6 +495,7 @@ def health():
         "fqs_pass_threshold": config.FQS_PASS_THRESHOLD,
         "video_ready": ffmpeg_available(),
         "music_tracks": _music_tracks,
+        "test_tones": _test_tones,
     }
 
 
@@ -549,7 +603,10 @@ def guidance(file: UploadFile = File(...),
     # semantic criterion after capture. This is a cheap deterministic proxy for
     # live use only, computed from the same product region the technical
     # criteria already use, so it introduces no new criterion to the framework.
-    framing_score, framing_msg = _framing_check(img, T, min_area, max_area, allow_edges)
+    framing_info = {}
+    framing_score, framing_msg = _framing_check(img, T, min_area, max_area, allow_edges,
+                                                framing_info)
+    zoom_hint = _zoom_hint(framing_info, shot, min_area, max_area)
     checks.append(CriterionScore(name="framing", score=round(framing_score, 3),
                                  weight=0.0,
                                  passed=framing_score >= GUIDANCE_PASS_MIN))
@@ -578,6 +635,7 @@ def guidance(file: UploadFile = File(...),
         checks=checks, feedback=feedback,
         elapsed_ms=int((time.time() - t0) * 1000),
         exposure_hint=exposure_hint,
+        zoom_hint=zoom_hint,
     )
 
 
@@ -633,7 +691,10 @@ def batch(files: List[UploadFile] = File(..., media_type="multipart/form-data"))
         role: [getattr(d, "path", "") for d in items]
         for role, items in result.role_sets.items()
     }
-    return BatchResponse(
+    from .batch_explain import explain_batch
+    _extra = explain_batch(result, FEEDBACK, config.SQS_PASS_THRESHOLDS)
+    return BatchResponse(images=_extra["images"], missing=_extra["missing"],
+                         
         certified=result.certified, selected=selected, role_sets=role_sets,
         recapture=result.recapture, elapsed_ms=int((time.time() - t0) * 1000),
     )
@@ -878,3 +939,11 @@ def video(
             "X-Video-Audio": "1" if result.has_audio else "0",
         },
     )
+
+# Automatic marketing video: /video/plan, /video/render (2026-10-06).
+from .video_api import router as video_router  # noqa: E402
+app.include_router(video_router)
+
+# Study sessions for the evaluation: POST /study/log (v1.1.0).
+from .study_api import router as study_router  # noqa: E402
+app.include_router(study_router)

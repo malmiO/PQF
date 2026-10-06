@@ -47,6 +47,26 @@ _INSTRUCTIONS = {
 }
 
 
+def _distinct_angles(angles: list, heroes: list) -> list:
+    """Angle shots that show DISTINCT views (spec Section 7, condition 2).
+
+    Implemented 2026-10-06: the condition always said "distinct angles", but only
+    the number of angle shots was counted, so two copies of the same view passed.
+    An angle counts if its view differs from the main shot and from every angle
+    already counted (views.NEAR_DUPLICATE). Images without a view signature (for
+    example decisions built in tests from scores alone) count as distinct, which is
+    the previous behaviour.
+    """
+    from ..pipeline.views import view_distance, NEAR_DUPLICATE
+    kept = []
+    for a in sorted(angles, key=lambda d: d.fqs, reverse=True):
+        sa = getattr(a, "view_sig", None)
+        if all(view_distance(sa, getattr(o, "view_sig", None)) >= NEAR_DUPLICATE
+               for o in [*heroes, *kept]):
+            kept.append(a)
+    return kept
+
+
 def check_gate(decisions: list) -> GateResult:
     """Run the set-level gate over a list of ImageDecision objects (the SELECTED set).
 
@@ -58,17 +78,19 @@ def check_gate(decisions: list) -> GateResult:
     details = [d for d in decisions if d.role == "detail_shot"
                and d.semantic_scores.get("feature_visibility", 0.0) >= GATE_DETAIL_FEATVIS_MIN]
 
+    distinct = _distinct_angles(angles, heroes)
     counts = {
         "total": len(decisions),
         "hero": len(heroes),
         "angle": len(angles),
+        "distinct_angles": len(distinct),
         "detail": len(details),
     }
 
     fails = []
     if len(heroes) < GATE_MIN_HEROES:
         fails.append("no_hero_shot")
-    if len(angles) < GATE_MIN_ANGLES:
+    if len(distinct) < GATE_MIN_ANGLES:
         fails.append("insufficient_angles")
     if len(details) < GATE_MIN_DETAILS:
         fails.append("no_detail_shot")

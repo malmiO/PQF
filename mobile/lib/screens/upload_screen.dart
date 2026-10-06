@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import '../models/api_result.dart';
 import '../services/pqf_api.dart';
 import '../widgets/error_view.dart';
+import '../widgets/help_sheet.dart';
 import 'results_screen.dart';
 
 /// Scores photos the user already has.
@@ -15,9 +16,9 @@ import 'results_screen.dart';
 /// easy to test, and useful to a seller who has already taken photos and wants
 /// to know which ones are good enough.
 class UploadScreen extends StatefulWidget {
-  final String productName;
+  final ProductDraft draft;
 
-  const UploadScreen({super.key, required this.productName});
+  const UploadScreen({super.key, required this.draft});
 
   @override
   State<UploadScreen> createState() => _UploadScreenState();
@@ -96,9 +97,9 @@ class _UploadScreenState extends State<UploadScreen> {
 
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => ResultsScreen(
-        productName: widget.productName,
+        draft: widget.draft,
         result: result.value!,
-        images: _images,
+        images: List<Uint8List>.of(_images),
       ),
     ));
   }
@@ -108,7 +109,8 @@ class _UploadScreenState extends State<UploadScreen> {
     final enough = _images.length >= 2;
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.productName)),
+      appBar: AppBar(title: Text(widget.draft.name),
+          actions: const [HelpButton(HelpTopic.upload)]),
       body: SafeArea(
         child: Column(
           children: [

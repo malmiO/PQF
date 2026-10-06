@@ -9,8 +9,10 @@ import 'dart:io';
 
 import '../config/api_config.dart';
 import '../models/api_result.dart';
+import '../models/product_draft.dart';
 export '../config/api_config.dart';
 export '../models/api_result.dart';
+export '../models/product_draft.dart';
 
 /// One criterion, as returned by the API.
 class CriterionResult {
@@ -62,12 +64,17 @@ class GuidanceResult {
   /// does by hand when a grey lightbox background needs more light.
   final int exposureHint;
 
+  /// Auto zoom (v1.1.0): the factor to apply on top of the current zoom so the
+  /// product reaches its target size. 1.0 means leave the zoom as it is.
+  final double zoomHint;
+
   GuidanceResult({
     required this.ready,
     required this.checks,
     required this.feedback,
     required this.elapsedMs,
     this.exposureHint = 0,
+    this.zoomHint = 1.0,
   });
 
   factory GuidanceResult.fromJson(Map<String, dynamic> j) => GuidanceResult(
@@ -78,6 +85,7 @@ class GuidanceResult {
         feedback: (j['feedback'] as List).map((f) => f as String).toList(),
         elapsedMs: j['elapsed_ms'] as int,
         exposureHint: (j['exposure_hint'] as num?)?.toInt() ?? 0,
+        zoomHint: (j['zoom_hint'] as num?)?.toDouble() ?? 1.0,
       );
 
   /// The single instruction to show. Showing every failing criterion at once
@@ -178,6 +186,72 @@ class BatchImageResult {
   }
 }
 
+/// One uploaded photo as /batch explains it: chosen for the set or not, and why
+/// (2026-10-06). One entry per photo, in upload order.
+class BatchPhoto {
+  final int index;
+  final String role;
+  final double fqs;
+  final bool passed;
+  final bool selected;
+
+  /// selected | same_view | not_needed | not_good_enough
+  final String status;
+
+  /// A plain sentence for the owner, written by the server.
+  final String message;
+
+  BatchPhoto({
+    required this.index,
+    required this.role,
+    required this.fqs,
+    required this.passed,
+    required this.selected,
+    required this.status,
+    required this.message,
+  });
+
+  factory BatchPhoto.fromJson(Map<String, dynamic> j) => BatchPhoto(
+        index: j['index'] as int,
+        role: (j['role'] ?? '') as String,
+        fqs: ((j['fqs'] ?? 0) as num).toDouble(),
+        passed: (j['passed'] ?? false) as bool,
+        selected: (j['selected'] ?? false) as bool,
+        status: (j['status'] ?? '') as String,
+        message: (j['message'] ?? '') as String,
+      );
+
+  /// Order of a set photo: main, angles, detail, then anything else.
+  int get roleRank {
+    switch (role) {
+      case 'hero_shot':
+        return 0;
+      case 'angle_shot':
+        return 1;
+      case 'detail_shot':
+        return 2;
+      default:
+        return 3;
+    }
+  }
+}
+
+/// A shot still needed before the set can be certified.
+class MissingShot {
+  /// hero_shot | angle_shot | detail_shot
+  final String role;
+  final int count;
+  final String message;
+
+  MissingShot({required this.role, required this.count, required this.message});
+
+  factory MissingShot.fromJson(Map<String, dynamic> j) => MissingShot(
+        role: (j['role'] ?? '') as String,
+        count: ((j['count'] ?? 1) as num).toInt(),
+        message: (j['message'] ?? '') as String,
+      );
+}
+
 /// Result of scoring a whole capture batch.
 class BatchResult {
   final bool certified;
@@ -185,11 +259,19 @@ class BatchResult {
   final Map<String, List<String>> roleSets;
   final Map<String, dynamic>? recapture;
 
+  /// Every photo, chosen or not, with the reason (2026-10-06).
+  final List<BatchPhoto> images;
+
+  /// Shots still needed; empty when certified.
+  final List<MissingShot> missing;
+
   BatchResult({
     required this.certified,
     required this.selected,
     required this.roleSets,
     this.recapture,
+    this.images = const [],
+    this.missing = const [],
   });
 
   factory BatchResult.fromJson(Map<String, dynamic> j) {
@@ -204,8 +286,26 @@ class BatchResult {
           .toList(),
       roleSets: rs,
       recapture: j['recapture'] as Map<String, dynamic>?,
+      images: ((j['images'] as List?) ?? const [])
+          .map((s) => BatchPhoto.fromJson(s as Map<String, dynamic>))
+          .toList(),
+      missing: ((j['missing'] as List?) ?? const [])
+          .map((s) => MissingShot.fromJson(s as Map<String, dynamic>))
+          .toList(),
     );
   }
+
+  /// The chosen set, in role order (main, angles, detail).
+  List<BatchPhoto> get setPhotos {
+    final s = images.where((p) => p.selected).toList();
+    s.sort((a, b) => a.roleRank != b.roleRank
+        ? a.roleRank.compareTo(b.roleRank)
+        : a.index.compareTo(b.index));
+    return s;
+  }
+
+  /// Every photo not in the set, in upload order.
+  List<BatchPhoto> get notUsed => images.where((p) => !p.selected).toList();
 
   /// What the user is told when the set is not good enough yet.
   String get recaptureInstruction =>
@@ -244,11 +344,15 @@ class MusicRecommendation {
   final List<MusicTrack> tracks;
   final String note;
 
+  /// mood -> one plain sentence describing it, from the server.
+  final Map<String, String> moodDescriptions;
+
   MusicRecommendation({
     required this.recommendedMood,
     required this.reason,
     required this.tracks,
     required this.note,
+    this.moodDescriptions = const {},
   });
 
   factory MusicRecommendation.fromJson(Map<String, dynamic> j) =>
@@ -259,7 +363,65 @@ class MusicRecommendation {
             .map((t) => MusicTrack.fromJson(t as Map<String, dynamic>))
             .toList()),
         note: (j['note'] ?? '') as String,
+        moodDescriptions: ((j['mood_descriptions'] as Map?) ?? const {})
+            .map((k, v) => MapEntry(k.toString(), v.toString())),
       );
+
+  /// The first installed track of [mood], or null if there is none.
+  MusicTrack? firstTrack(String mood) {
+    for (final t in tracks) {
+      if (t.mood == mood) return t;
+    }
+    return null;
+  }
+}
+
+/// One rule of the "ready to post" checklist in a video plan.
+class ChecklistItem {
+  final String rule;
+  final bool met;
+  final String detail;
+
+  ChecklistItem({required this.rule, required this.met, required this.detail});
+
+  factory ChecklistItem.fromJson(Map<String, dynamic> j) => ChecklistItem(
+        rule: (j['rule'] ?? '') as String,
+        met: (j['met'] ?? false) as bool,
+        detail: (j['detail'] ?? '') as String,
+      );
+}
+
+/// The plan returned by POST /video/plan. [raw] is kept whole for results.json.
+class VideoPlan {
+  final Map<String, dynamic> raw;
+
+  VideoPlan(this.raw);
+
+  String get planId => (raw['plan_id'] ?? '') as String;
+
+  String get caption =>
+      ((raw['post'] as Map?)?['caption'] ?? '') as String;
+
+  num get durationSeconds => (raw['duration_seconds'] ?? 0) as num;
+
+  List<ChecklistItem> get checklist => ((raw['checklist'] as List?) ?? const [])
+      .map((c) => ChecklistItem.fromJson(c as Map<String, dynamic>))
+      .toList();
+}
+
+/// The MP4 from POST /video/render, with what the server says about it.
+class RenderedVideo {
+  final Uint8List bytes;
+  final String duration;
+  final String format;
+  final bool hasAudio;
+
+  RenderedVideo({
+    required this.bytes,
+    required this.duration,
+    required this.format,
+    required this.hasAudio,
+  });
 }
 
 /// Client for the PQF API.
@@ -391,16 +553,57 @@ class PqfApi {
     }
   }
 
-  /// Assembles the certified images into a marketing video and returns the mp4.
+  /// The `detail` FastAPI puts in an error body, or null.
+  static String? _serverDetail(String body) {
+    try {
+      final d = (jsonDecode(body) as Map<String, dynamic>)['detail'];
+      return d is String && d.isNotEmpty ? d : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Classifies a failed /video/plan or /video/render response, logging the
+  /// status and the start of the body so the real cause is visible.
+  ApiFailure _videoFailure(String call, int status, String body) {
+    final snippet = body.length > 300 ? body.substring(0, 300) : body;
+    debugPrint('[video] $call failed: status=$status body=$snippet');
+    final detail = _serverDetail(body);
+    switch (status) {
+      case 404: // plan expired, or its music track is gone
+        return ApiFailure.videoPlanExpired(body, serverDetail: detail);
+      case 503: // the server has no ffmpeg
+        return ApiFailure.videoUnavailable(body);
+      case 500: // the server tried and failed
+        return ApiFailure.videoFailed(body, serverDetail: detail);
+      case 502:
+      case 504: // gateway timeout, usually a slow tunnel
+        return ApiFailure.videoTimeout('HTTP $status. $body');
+      default:
+        return _fromResponse(status, body);
+    }
+  }
+
+  ApiFailure _videoThrown(String call, Object e) {
+    debugPrint('[video] $call threw: status=none body=$e');
+    final text = e.toString();
+    if (e is TimeoutException ||
+        text.contains('TimeoutException') ||
+        text.contains('timed out')) {
+      return ApiFailure.videoTimeout(text);
+    }
+    return _classify(e);
+  }
+
+  /// Plans the marketing video from the certified set and the product form.
   ///
-  /// The SAME original bytes that were scored are sent, never re-encoded, so the
-  /// video is made from exactly the images the framework certified. [roles] are
-  /// in the same order as [images].
-  Future<ApiResult<Uint8List>> createVideo({
+  /// The SAME original bytes that were scored are sent, never re-encoded. [roles]
+  /// are in the same order as [images]. The server asks the model once where the
+  /// features are, so this can take up to a minute.
+  Future<ApiResult<VideoPlan>> videoPlan({
     required List<Uint8List> images,
     required List<String> roles,
-    required String format,
-    String? trackId,
+    required ProductDraft draft,
   }) async {
     if (images.isEmpty) {
       return ApiResult.failure(ApiFailure.badImage('No images to send.'));
@@ -408,13 +611,18 @@ class PqfApi {
     try {
       final req = http.MultipartRequest(
         'POST',
-        Uri.parse('${ApiConfig.baseUrl}/video'),
-      )
-        ..fields['roles'] = roles.join(',')
-        ..fields['format'] = format;
-      if (trackId != null && trackId.isNotEmpty) {
-        req.fields['track_id'] = trackId;
-      }
+        Uri.parse('${ApiConfig.baseUrl}/video/plan'),
+      )..fields.addAll({
+          'roles': roles.join(','),
+          'product_name': draft.name,
+          'price': draft.price,
+          'features': draft.cleanFeatures.take(3).join('\n'),
+          'category': draft.category,
+          'mood': draft.mood,
+          'format': draft.format,
+          'shop': draft.shop,
+          'contact': draft.contact,
+        });
       for (var i = 0; i < images.length; i++) {
         req.files.add(http.MultipartFile.fromBytes(
           'files',
@@ -423,40 +631,63 @@ class PqfApi {
           contentType: MediaType('image', 'jpeg'),
         ));
       }
-      final streamed = await req.send().timeout(ApiConfig.videoTimeout);
-      final bytes = await streamed.stream.toBytes();
-      final status = streamed.statusCode;
-      if (status == 200) {
-        return ApiResult.success(bytes);
+      final streamed = await req.send().timeout(ApiConfig.videoPlanTimeout);
+      final body = await streamed.stream
+          .bytesToString()
+          .timeout(ApiConfig.videoPlanTimeout);
+      if (streamed.statusCode != 200) {
+        return ApiResult.failure(
+            _videoFailure('POST /video/plan', streamed.statusCode, body));
       }
-      final body = String.fromCharCodes(bytes);
-      // Log every /video failure so the real cause is visible, not hidden
-      // behind a user-facing message.
-      final snippet = body.length > 300 ? body.substring(0, 300) : body;
-      debugPrint('[video] POST /video failed: status=$status body=$snippet');
-      switch (status) {
-        case 404: // the chosen track is missing
-          return ApiResult.failure(ApiFailure.musicMissing(body));
-        case 503: // the server has no ffmpeg
-          return ApiResult.failure(ApiFailure.videoUnavailable(body));
-        case 500: // the server tried to assemble and failed
-          return ApiResult.failure(ApiFailure.videoFailed(body));
-        case 502:
-        case 504: // gateway timeout, usually a slow tunnel
-          return ApiResult.failure(ApiFailure.videoTimeout('HTTP $status. $body'));
-        default:
-          return ApiResult.failure(_fromResponse(status, body));
-      }
-    } on TimeoutException catch (e) {
-      debugPrint('[video] POST /video timed out: $e');
-      return ApiResult.failure(ApiFailure.videoTimeout(e.toString()));
+      return ApiResult.success(
+          VideoPlan(jsonDecode(body) as Map<String, dynamic>));
     } catch (e) {
-      debugPrint('[video] POST /video threw: $e');
-      final text = e.toString();
-      if (text.contains('TimeoutException') || text.contains('timed out')) {
-        return ApiResult.failure(ApiFailure.videoTimeout(text));
+      return ApiResult.failure(_videoThrown('POST /video/plan', e));
+    }
+  }
+
+  /// The saved plan. After /video/render it holds the checklist MEASURED from
+  /// the finished video (v1.1.0), which the result screen shows.
+  Future<ApiResult<VideoPlan>> getVideoPlan(String planId) async {
+    try {
+      final r = await _client
+          .get(Uri.parse('${ApiConfig.baseUrl}/video/plan/$planId'))
+          .timeout(const Duration(seconds: 20));
+      if (r.statusCode != 200) {
+        return ApiResult.failure(
+            _videoFailure('GET /video/plan', r.statusCode, r.body));
       }
-      return ApiResult.failure(_classify(e));
+      return ApiResult.success(
+          VideoPlan(jsonDecode(r.body) as Map<String, dynamic>));
+    } catch (e) {
+      return ApiResult.failure(_videoThrown('GET /video/plan', e));
+    }
+  }
+
+  /// Renders the MP4 from a saved plan. Up to three minutes.
+  Future<ApiResult<RenderedVideo>> renderVideo(String planId) async {
+    try {
+      final req = http.MultipartRequest(
+        'POST',
+        Uri.parse('${ApiConfig.baseUrl}/video/render'),
+      )..fields['plan_id'] = planId;
+      final streamed = await req.send().timeout(ApiConfig.videoTimeout);
+      final bytes =
+          await streamed.stream.toBytes().timeout(ApiConfig.videoTimeout);
+      final status = streamed.statusCode;
+      if (status != 200) {
+        return ApiResult.failure(_videoFailure(
+            'POST /video/render', status, utf8.decode(bytes, allowMalformed: true)));
+      }
+      final h = streamed.headers;
+      return ApiResult.success(RenderedVideo(
+        bytes: bytes,
+        duration: h['x-video-duration'] ?? '',
+        format: h['x-video-format'] ?? '',
+        hasAudio: h['x-video-audio'] == '1',
+      ));
+    } catch (e) {
+      return ApiResult.failure(_videoThrown('POST /video/render', e));
     }
   }
 

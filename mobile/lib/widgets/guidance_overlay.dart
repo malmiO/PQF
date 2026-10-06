@@ -235,15 +235,33 @@ class ScoredRegionGuide extends StatelessWidget {
   /// main | angle | detail | extra, from the current ShotPlan step.
   final String shotType;
 
+  /// The UNGUIDED study condition (v1.1.0): the same scored 4:5 region is shown
+  /// (same crop), but no status, no caption and no framing target.
+  final bool neutral;
+
   const ScoredRegionGuide({
     super.key,
     required this.guidance,
     required this.waiting,
     required this.shotType,
+    this.neutral = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (neutral) {
+      return IgnorePointer(
+        child: LayoutBuilder(builder: (context, c) {
+          final rectH = math.min(c.maxWidth * 5 / 4, c.maxHeight);
+          final rect = Rect.fromLTWH(0, (c.maxHeight - rectH) / 2, c.maxWidth, rectH);
+          return CustomPaint(
+            size: Size(c.maxWidth, c.maxHeight),
+            painter: _ScoredRegionPainter(
+                rect: rect, borderColor: Colors.white70, showInnerBox: false),
+          );
+        }),
+      );
+    }
     final hasData = guidance.checks.isNotEmpty;
     final status = !hasData
         ? _FramingStatus.checking

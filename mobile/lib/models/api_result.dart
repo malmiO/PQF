@@ -103,13 +103,21 @@ class ApiFailure {
         technical: detail,
       );
 
-  /// The chosen music track is missing on the server (video /video 404).
-  static ApiFailure musicMissing(String? detail) => ApiFailure(
-        kind: FailureKind.badImage,
-        message: 'That music is not available. Choose another.',
-        action: 'Pick a different track, or make the video without music.',
+  /// The saved video plan, or its music, is gone from the server (404 from
+  /// /video/render). Trying again plans the video afresh.
+  static ApiFailure videoPlanExpired(String? detail, {String? serverDetail}) =>
+      ApiFailure(
+        kind: FailureKind.serverError,
+        message: serverDetail ?? 'The video plan has expired.',
+        action: planExpiredAction,
         technical: detail,
       );
+
+  static const String planExpiredAction =
+      'Try again to plan and make the video afresh.';
+
+  /// True for [videoPlanExpired]: the plan must be made again before rendering.
+  bool get planExpired => action == planExpiredAction;
 
   /// Video making is unavailable because the server has no ffmpeg (503).
   static ApiFailure videoUnavailable(String? detail) => ApiFailure(
@@ -121,10 +129,14 @@ class ApiFailure {
 
   /// The server tried to make the video but failed (500). Distinct from 503 so
   /// a genuine assembly error is not hidden behind "not available".
-  static ApiFailure videoFailed(String? detail) => ApiFailure(
+  /// [serverDetail] is the server's own explanation, shown to the owner.
+  static ApiFailure videoFailed(String? detail, {String? serverDetail}) =>
+      ApiFailure(
         kind: FailureKind.serverError,
         message: 'The video could not be made. Try again.',
-        action: 'If it keeps happening, try with fewer images.',
+        action: serverDetail == null || serverDetail.isEmpty
+            ? 'If it keeps happening, try with fewer images.'
+            : 'The server said: $serverDetail',
         technical: detail,
       );
 

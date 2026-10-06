@@ -46,21 +46,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   static const _pages = <_OnboardPage>[
     _OnboardPage(
       icon: Icons.photo_camera_outlined,
-      title: 'What this app does',
-      body: 'It guides you to take product photos that meet a marketing '
-          'standard, picks your best set, and makes a short video.',
+      title: 'What PQF does',
+      body: 'Take product photos that sell, and get a ready video.',
     ),
     _OnboardPage(
       icon: Icons.light_mode_outlined,
-      title: 'Set up',
-      body: 'Use a plain white background and a light box if you have one. '
-          'Light the product from the front, and use a phone stand if possible.',
+      title: 'What you need',
+      body: 'A light box, or a white sheet near a window. A phone stand if you '
+          'have one.',
     ),
     _OnboardPage(
-      icon: Icons.center_focus_strong_outlined,
-      title: 'How to shoot',
-      body: 'Follow the frame, one instruction at a time. When the frame turns '
-          'green the photo is taken for you.',
+      icon: Icons.route_outlined,
+      title: 'How it works',
+      body: 'Product details, then photos. We check them and choose your set. '
+          'Then you get your video.',
     ),
   ];
 

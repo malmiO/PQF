@@ -27,15 +27,15 @@ mobile/.flutter-plugins*
 mobile/.packages
 mobile/.flutter-plugins-dependencies
 mobile/.flutter-plugins
-mobile/android/
 mobile/ios/
 mobile/.idea/
 mobile/web/
 mobile/macOS/
-mobile/assets/
 mobile/linux/
 mobile/windows/
 mobile/assets/config.env
+mobile/assets/
+
 
 # OS / editor
 .DS_Store
@@ -90,3 +90,11 @@ pqf_update_*/
 apply_fixes_*.py
 *.mp4
 Thumbs.db
+
+research/results/study_log.jsonl
+research/results/study_export*.csv
+test-img/review/
+# Kotlin compiler crash logs
+mobile/android/.kotlin/
+
+backend/assets/music/

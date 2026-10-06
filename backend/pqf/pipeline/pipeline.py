@@ -53,6 +53,12 @@ def _attach(d: ImageDecision, path: str | None) -> ImageDecision:
     return d
 
 
+def _with_sig(sig, d, path):
+    """Attach the view signature, then the path (2026-10-06)."""
+    setattr(d, "view_sig", sig)
+    return _attach(d, path)
+
+
 def score_image(image_bytes: bytes, path: str | None = None,
                 mime: str = "image/jpeg") -> ImageDecision:
     """Run one image through the complete framework.
@@ -94,12 +100,21 @@ def score_image(image_bytes: bytes, path: str | None = None,
     # Mandatory preprocessing before any metric is computed.
     img = standardise(img)
 
+    # View signature (2026-10-06): how this photo's view of the product looks, so
+    # the set can prefer DIFFERENT angles and the gate can check that angle shots
+    # are distinct, as spec Section 7 requires. Not a criterion; never scored.
+    try:
+        from .views import view_signature
+        sig = view_signature(img)
+    except Exception:
+        sig = None
+
     # Technical engine. T0 is re-checked internally and will pass here.
     tech = compute_tqs(img, check_gate=False)  # T0 already checked on the original
 
     # Defensive. Should not trigger, since T0 was checked on the original above.
     if not tech.passed_gate:
-        return _attach(ImageDecision(tqs=tech.tqs, role="reject", passed=False,
+        return _with_sig(sig, ImageDecision(tqs=tech.tqs, role="reject", passed=False,
                                      hard_rejected=True,
                                      reason="t0_platform_spec_fail"), path)
 
@@ -111,20 +126,20 @@ def score_image(image_bytes: bytes, path: str | None = None,
         # this the batch had no scores to explain the rejection, so the app
         # showed "Retake this one" with no reason.
         setattr(d, "technical_scores", tech.scores)
-        return _attach(d, path)
+        return _with_sig(sig, d, path)
 
     # Semantic evaluator.
     from ..semantic import evaluate_semantic
     sem = evaluate_semantic(image_bytes, mime)
 
     if not sem.ok:
-        return _attach(ImageDecision(tqs=tech.tqs, role="reject", passed=False,
+        return _with_sig(sig, ImageDecision(tqs=tech.tqs, role="reject", passed=False,
                                      reason=f"semantic_failed. {sem.error}"), path)
 
     d = decide_image(tech.tqs, sem.sqs, sem.scores)
     # Keep the per criterion technical scores available for reporting.
     setattr(d, "technical_scores", tech.scores)
-    return _attach(d, path)
+    return _with_sig(sig, d, path)
 
 
 def _meets(role: str, d) -> bool:
@@ -159,28 +174,83 @@ def _assign_roles_in_set(passing: list) -> list:
     return ranked
 
 
-def _select_best_set(passing: list) -> list:
-    """Select the set forwarded to the gate, role aware (fixed 2026-10-03).
+# Best 4 to 5 (2026-10-06). The gate allows 4 to 6 images; a short video and a
+# listing need 4 or 5. The set is the gate's required roles, each the best of its
+# role, with the ANGLE PAIR chosen to be as different as possible from each other
+# and from the main shot (Fan et al., KDD 2022: no two images from similar viewing
+# angles), then at most one more photo, only if it shows a view not yet in the set.
+# v1.1.0: exactly the four the gate requires (main, two distinct angles, detail),
+# at the owner's request; extra photos are reported as "not needed".
+SELECT_MAX = 4
+DIVERSITY_FQS_WEIGHT = 0.25   # quality still counts: 0.1 FQS is worth 0.025 distance
 
-    The old version kept the top images by FQS whatever their role, so a batch
-    of more than six could drop the only detail shot. The set now takes what the
-    gate requires first (one hero, the angles, one detail), each the best of its
-    role, then fills the remaining places by FQS, up to the gate maximum.
+
+def _dist(a, b) -> float:
+    from .views import view_distance
+    return view_distance(getattr(a, "view_sig", None), getattr(b, "view_sig", None))
+
+
+def _min_dist(d, others) -> float:
+    return min((_dist(d, o) for o in others), default=1.0)
+
+
+def _select_best_set(passing: list) -> list:
+    """Select the set forwarded to the gate (role aware 2026-10-03; diverse 2026-10-06).
+
+    1. The main shot: the best hero. The detail: the best detail.
+    2. The two angles: of all angle shots, the PAIR whose views differ most from
+       each other and from the main shot, with FQS as a smaller second factor.
+       An angle that repeats a view already chosen is left out.
+    3. Fill to SELECT_MAX with the photo that adds the most different view, but
+       never a near duplicate of a photo already chosen.
+    Each image not chosen gets `selection_note` and, if it repeats a chosen view,
+    `duplicate_of`, so the app can tell the owner why.
     """
-    from ..combination.gate import (GATE_SET_MAX, GATE_MIN_HEROES,
-                                    GATE_MIN_ANGLES, GATE_MIN_DETAILS)
+    from itertools import combinations
+    from .views import NEAR_DUPLICATE
     ranked = _assign_roles_in_set(passing)
-    need = {"hero_shot": GATE_MIN_HEROES, "angle_shot": GATE_MIN_ANGLES,
-            "detail_shot": GATE_MIN_DETAILS}
-    chosen = []
-    for role, n in need.items():
-        chosen += [d for d in ranked if d.role == role][:n]
-    for d in ranked:
-        if len(chosen) >= GATE_SET_MAX:
+    by = {r: [d for d in ranked if d.role == r]
+          for r in ("hero_shot", "angle_shot", "detail_shot")}
+    hero = by["hero_shot"][0] if by["hero_shot"] else None
+    detail = by["detail_shot"][0] if by["detail_shot"] else None
+    anchor = [hero] if hero else []
+
+    angles = by["angle_shot"]
+    if len(angles) >= 2:
+        def pair_value(p):
+            a, b = p
+            spread = min(_dist(a, b), _min_dist(a, anchor), _min_dist(b, anchor))
+            return spread + DIVERSITY_FQS_WEIGHT * (a.fqs + b.fqs) / 2
+        pair = list(max(combinations(angles, 2), key=pair_value))
+    else:
+        pair = angles[:1]
+
+    # An angle that repeats the main shot's view, or the other angle's, is not a
+    # second view; leave it out so the gate asks for a real one.
+    kept = []
+    for a in pair:
+        if _min_dist(a, anchor + kept) >= NEAR_DUPLICATE:
+            kept.append(a)
+    chosen = [d for d in [hero, *kept, detail] if d is not None]
+    while len(chosen) < SELECT_MAX:
+        pool = [d for d in ranked if d not in chosen
+                and _min_dist(d, chosen) >= NEAR_DUPLICATE]
+        if not pool:
             break
-        if d not in chosen:
-            chosen.append(d)
-    return sorted(chosen[:GATE_SET_MAX], key=lambda d: d.fqs, reverse=True)
+        chosen.append(max(pool, key=lambda d: _min_dist(d, chosen)
+                          + DIVERSITY_FQS_WEIGHT * d.fqs))
+
+    for d in ranked:
+        if d in chosen:
+            setattr(d, "selection_note", "selected")
+            continue
+        twin = min(chosen, key=lambda c: _dist(d, c), default=None)
+        if twin is not None and _dist(d, twin) < NEAR_DUPLICATE:
+            setattr(d, "selection_note", "same_view")
+            setattr(d, "duplicate_of", twin)
+        else:
+            setattr(d, "selection_note", "not_needed")
+    return chosen
 
 
 def process_batch(images: list) -> BatchResult:

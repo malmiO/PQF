@@ -42,10 +42,19 @@ class Track:
     mood: str
     filename: str
     attribution: str
+    artist: str = ""
+    licence: str = ""
+    source_url: str = ""
+    bpm: float | None = None
 
     @property
     def path_name(self) -> str:
         return self.filename
+
+    @property
+    def is_test_tone(self) -> bool:
+        from ..audio.settings import TEST_LICENCE
+        return self.licence == TEST_LICENCE
 
 
 @dataclass
@@ -89,43 +98,55 @@ DEFAULT_MOOD = ("upbeat", "A bright track suits most social media product "
 
 
 def library_dir(base: Path) -> Path:
-    # The manifest is committed at backend/assets/music, and `base` is the repo
-    # root (main.py passes parents[2]). The original base/"assets"/"music"
-    # pointed at a repo-root folder that does not exist, so the committed
-    # manifest was never read and /music was always empty (fixed 2026-10-05).
-    # A repo-root assets/music is still honoured as a fallback if it exists.
-    backend_dir = base / "backend" / "assets" / "music"
-    if backend_dir.exists():
-        return backend_dir
-    root_dir = base / "assets" / "music"
-    return root_dir if root_dir.exists() else backend_dir
+    """Where the original audio files are (backend/assets/music)."""
+    from ..audio.settings import FILES_DIR
+    return base / FILES_DIR
+
+
+def playable_path(track: "Track", base: Path) -> Path:
+    """The loudness normalised copy, the ONLY file the renderer and the preview
+    use (v1.1.0). Made once by scripts/normalise_tracks.py."""
+    from ..audio.settings import NORMALISED_DIR
+    return base / NORMALISED_DIR / track.filename
 
 
 def load_library(base: Path) -> list:
-    """Reads the track library from a manifest.
+    """Reads the track library from the manifest (backend/audio/tracks.csv).
 
-    The manifest exists so every track carries its licence attribution, which
-    must be recorded rather than assumed.
+    The manifest exists so every track carries its licence and attribution,
+    which must be recorded rather than assumed (checked by scripts/check_tracks.py).
     """
-    import csv
-
-    manifest = library_dir(base) / "tracks.csv"
-    if not manifest.exists():
-        return []
+    from ..audio.catalog import read_rows
 
     tracks = []
-    with open(manifest, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            if not row.get("filename"):
-                continue
-            tracks.append(Track(
-                id=row.get("id", row["filename"]),
-                title=row.get("title", row["filename"]),
-                mood=row.get("mood", "upbeat").strip().lower(),
-                filename=row["filename"],
-                attribution=row.get("attribution", ""),
-            ))
+    for row in read_rows(base):
+        if not row.get("file"):
+            continue
+        try:
+            bpm = float(row["bpm"]) if row.get("bpm") else None
+        except ValueError:
+            bpm = None
+        tracks.append(Track(
+            id=row.get("track_id") or row["file"],
+            title=row.get("title") or row["file"],
+            mood=(row.get("mood") or "upbeat").lower(),
+            filename=row["file"],
+            attribution=row.get("attribution", ""),
+            artist=row.get("artist", ""),
+            licence=row.get("licence", ""),
+            source_url=row.get("source_url", ""),
+            bpm=bpm,
+        ))
     return tracks
+
+
+def _pace_order(tracks: list, mood: str) -> list:
+    """Tracks of a mood, the one whose bpm is closest to the mood's pace first
+    (calm slower, upbeat faster). Tracks without a bpm come last."""
+    from ..audio.settings import MOOD_BPM
+    target = MOOD_BPM.get(mood)
+    return sorted(tracks, key=lambda t: (t.bpm is None or target is None,
+                                         abs((t.bpm or 0) - (target or 0))))
 
 
 def recommend(category: str | None, base: Path) -> MoodRecommendation:
@@ -143,12 +164,13 @@ def recommend(category: str | None, base: Path) -> MoodRecommendation:
             mood, reason = m, r
             break
 
-    # Only offer tracks whose audio file is actually present. Offering a track
-    # that cannot be played produced a silent video with no error (2026-10-05).
-    all_tracks = [t for t in load_library(base)
-                  if (library_dir(base) / t.filename).exists()]
-    preferred = [t for t in all_tracks if t.mood == mood]
-    others = [t for t in all_tracks if t.mood != mood]
+    # Only offer tracks whose normalised audio file is actually present. Offering
+    # a track that cannot be played produced a silent video with no error
+    # (2026-10-05). Within each mood, the closest bpm comes first (v1.1.0).
+    all_tracks = [t for t in load_library(base) if playable_path(t, base).exists()]
+    preferred = _pace_order([t for t in all_tracks if t.mood == mood], mood)
+    others = [t for m in MOODS if m != mood
+              for t in _pace_order([t for t in all_tracks if t.mood == m], m)]
 
     return MoodRecommendation(
         mood=mood,
@@ -161,6 +183,17 @@ def resolve_track(track_id: str, base: Path) -> Path | None:
     """Finds the audio file for a chosen track, or None if it is unknown."""
     for t in load_library(base):
         if t.id == track_id:
-            p = library_dir(base) / t.filename
+            p = playable_path(t, base)
             return p if p.exists() else None
     return None
+
+
+def first_track(mood: str, base: Path):
+    """The track a video of this mood uses: the closest bpm, or None."""
+    return next((t for t in recommend(None, base).tracks if t.mood == mood), None)
+
+
+def tracks_per_mood(base: Path) -> dict:
+    """{mood: number of playable tracks}, for /health."""
+    tracks = recommend(None, base).tracks
+    return {m: sum(1 for t in tracks if t.mood == m) for m in MOODS}
