@@ -15,6 +15,7 @@ venv/
 
 # Secrets — API keys must never be committed
 .env
+*.env
 *.key
 backend/api/secrets.py
 
@@ -26,14 +27,15 @@ mobile/.flutter-plugins*
 mobile/.packages
 mobile/.flutter-plugins-dependencies
 mobile/.flutter-plugins
-mobile/android/
 mobile/ios/
 mobile/.idea/
 mobile/web/
 mobile/macOS/
-mobile/assets/
 mobile/linux/
 mobile/windows/
+mobile/assets/config.env
+mobile/assets/
+
 
 # OS / editor
 .DS_Store
@@ -66,10 +68,33 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 
-# Configuration containing the server address. Never commit this.
-.env
-
 # IDE
 .idea/
 *.iml
 .vscode/
+
+# Repo hygiene (added 2026-10-03). 
+**/config.env
+*.bak_*
+*backup*/
+pqf_fixes_*.zip
+.pytest_cache/
+test-img/
+
+backend/assets/music/test_*.mp3
+
+# PQF hygiene 2026-10-05
+pqf_update_*.zip
+pqf_fixes_*/
+pqf_update_*/
+apply_fixes_*.py
+*.mp4
+Thumbs.db
+
+research/results/study_log.jsonl
+research/results/study_export*.csv
+test-img/review/
+# Kotlin compiler crash logs
+mobile/android/.kotlin/
+
+backend/assets/music/

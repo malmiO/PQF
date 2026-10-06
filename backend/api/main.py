@@ -20,18 +20,37 @@ so use your machine's LAN address, for example http://192.168.1.5:8000
 """
 from __future__ import annotations
 
+# Load secrets BEFORE anything reads the environment (fixed 2026-10-01:
+# without this the server silently used mock semantic scores).
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import io
 import time
 from typing import List
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from ..pqf import config
 from ..pqf.pipeline import score_image, process_batch
 from ..pqf.combination import ImageDecision
+
+def _semantic_mode() -> str:
+    if os.environ.get("PQF_SEMANTIC_MOCK") == "1":
+        return "MOCK (testing only, scores are not real judgements)"
+    return "LIVE" if os.environ.get("GEMINI_API_KEY") else "MISSING_KEY"
+
+
+if _semantic_mode() == "MISSING_KEY":
+    raise RuntimeError(
+        "GEMINI_API_KEY is not set. Put it in backend .env (local) or the "
+        "host's environment variables (deployed). For offline tests only, "
+        "set PQF_SEMANTIC_MOCK=1.")
+
 
 app = FastAPI(
     title="Photography Quality Framework API",
@@ -62,6 +81,76 @@ GUIDANCE_SHARPNESS_MIN = 0.12 # lower than scoring, since variance falls with si
 GUIDANCE_MIN_PRODUCT_AREA = 0.10
 GUIDANCE_MAX_PRODUCT_AREA = 0.68
 GUIDANCE_CENTRE_TOLERANCE = 0.34
+
+# Background diagnosis for live guidance (2026-10-05). A uniform border whose
+# brightness is between these values is a plain background that reads grey.
+GUIDANCE_BG_GREY_MIN = 140
+GUIDANCE_BG_UNIFORM_SPREAD = 40
+GREY_BACKGROUND_MSG = ("The background looks grey. Raise the brightness: tap the "
+                       "product, then slide the brightness up.")
+
+# Per shot framing for LIVE GUIDANCE only (added 2026-10-03). The certification
+# rules are unchanged. A detail shot is a close up: the product legitimately fills
+# the frame and touches its edges, so the main shot bounds would block it forever.
+# (min product area, max product area, product may touch the edges)
+# Auto zoom (v1.1.0). The size each shot type is zoomed towards, as the share of
+# the scored region the product covers: the middle of its allowed range, so the
+# zoom stops well inside it rather than at the edge. Design prior.
+GUIDANCE_ZOOM_TARGET_AREA = {"main": 0.32, "angle": 0.32, "extra": 0.32, "detail": 0.55}
+# Zoom never pushes the product closer than this to the frame edge (share of the
+# half width / half height from the centre).
+GUIDANCE_ZOOM_EDGE_LIMIT = 0.92
+# A hint smaller than this change is not worth acting on (dead band).
+GUIDANCE_ZOOM_MIN_STEP = 0.08
+
+GUIDANCE_SHOT_FRAMING = {
+    "main":   (GUIDANCE_MIN_PRODUCT_AREA, GUIDANCE_MAX_PRODUCT_AREA, False),
+    "angle":  (GUIDANCE_MIN_PRODUCT_AREA, GUIDANCE_MAX_PRODUCT_AREA, False),
+    "extra":  (GUIDANCE_MIN_PRODUCT_AREA, GUIDANCE_MAX_PRODUCT_AREA, False),
+    "detail": (0.30, 1.00, True),
+}
+
+
+def _background_diagnosis(img) -> str:
+    """Why the background check failed: 'grey' or 'cluttered' (added 2026-10-05).
+
+    A plain light background that reads grey (a budget lightbox, auto exposure
+    pulling white towards mid grey) is fixed by RAISING THE BRIGHTNESS, not by
+    changing the surface. A cluttered background is fixed by changing the
+    surface. Telling them apart: a plain background is UNIFORM in the border.
+    """
+    import numpy as np
+    h, w = img.shape[:2]
+    b = max(2, int(min(h, w) * config.T3_BORDER_FRACTION))
+    border = np.concatenate([img[:b].reshape(-1, 3), img[-b:].reshape(-1, 3),
+                             img[:, :b].reshape(-1, 3), img[:, -b:].reshape(-1, 3)])
+    lum = border.mean(axis=1)
+    p10, p90 = np.percentile(lum, 10), np.percentile(lum, 90)
+    chroma = float(np.median(border.max(axis=1) - border.min(axis=1)))
+    uniform = (p90 - p10) <= GUIDANCE_BG_UNIFORM_SPREAD and chroma <= 25
+    if uniform and GUIDANCE_BG_GREY_MIN <= float(np.median(lum)) < config.T3_WHITE_THRESHOLD:
+        return "grey"
+    return "cluttered"
+
+
+def _crop_to_platform(img):
+    """Centre crop an image ARRAY to the platform aspect range (4:5 to 1.91:1).
+
+    Same geometry as _platform_format, which crops the captured photo before
+    scoring. Guidance uses it so the live checks look at exactly the region
+    that will be scored, not the strips above and below it that will be
+    thrown away (added 2026-10-03)."""
+    lo, hi = config.T0_ASPECT_MIN, config.T0_ASPECT_MAX
+    h, w = img.shape[:2]
+    if w / h < lo:
+        new_h = int(w / lo)
+        top = (h - new_h) // 2
+        return img[top:top + new_h, :]
+    if w / h > hi:
+        new_w = int(h * hi)
+        left = (w - new_w) // 2
+        return img[:, left:left + new_w]
+    return img
 # Declared content types we accept. octet-stream is included deliberately,
 # because several HTTP clients, including Flutter's, omit the type on a
 # multipart part and the transport defaults to octet-stream. Rejecting on the
@@ -102,6 +191,13 @@ class GuidanceResponse(BaseModel):
     checks: List[CriterionScore]
     feedback: List[str]
     elapsed_ms: int
+    # +1 means "raise the brightness", -1 "lower it", 0 no change. Lets the app
+    # adjust exposure compensation itself, the step a photographer does by hand.
+    exposure_hint: int = 0
+    # Auto zoom (v1.1.0): the zoom factor to apply ON TOP of the current zoom so
+    # the product reaches its target size (1.0 = leave it). Measured on the frame
+    # as the camera sends it, so it is always relative to the current zoom.
+    zoom_hint: float = 1.0
 
 
 class BatchImageResult(BaseModel):
@@ -109,6 +205,12 @@ class BatchImageResult(BaseModel):
     fqs: float
     role: str
     passed: bool
+    # Included so the app can explain a verdict rather than only state it. A
+    # seller told an image was not used, with no reason, learns nothing.
+    tqs: float = 0.0
+    sqs: float = 0.0
+    reason: str = ""
+    weakest: str = ""
 
 
 class BatchResponse(BaseModel):
@@ -117,6 +219,8 @@ class BatchResponse(BaseModel):
     role_sets: dict
     recapture: dict | None
     elapsed_ms: int
+    images: list = []       # every photo: chosen or not, and why (2026-10-06)
+    missing: list = []      # shots still to take: [{role, count, message}]
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +273,42 @@ def _read_upload(f: UploadFile) -> bytes:
     return data
 
 
+def _platform_format(data: bytes) -> bytes:
+    """Fit an out of range photo to the nearest platform aspect, losslessly.
+
+    Upright phone photos are 3:4 or 9:16. T0 accepts 4:5 to 1.91:1, the range
+    social feeds display, so ordinary upright photos failed T0 and scored zero.
+    Platforms centre crop such photos on upload, so the same step runs here,
+    BEFORE the framework, and the framework scores the image that would be
+    posted. In range images are returned byte for byte, no re-encode. Out of
+    range images are centre cropped and encoded as PNG (lossless). The
+    framework, including T0, is unchanged. (Added 2026-10-01.)
+    """
+    import numpy as np
+    import cv2
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return data
+    lo, hi = config.T0_ASPECT_MIN, config.T0_ASPECT_MAX
+    h, w = img.shape[:2]
+    if lo <= w / h <= hi:
+        return data
+    if max(h, w) > 2048:  # keep the PNG well under the model's upload limit
+        k = 2048 / max(h, w)
+        img = cv2.resize(img, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA)
+        h, w = img.shape[:2]
+    if w / h < lo:  # too tall. Crop last, rounding down, so it lands in range
+        new_h = int(w / lo)
+        top = (h - new_h) // 2
+        img = img[top:top + new_h, :]
+    else:
+        new_w = int(h * hi)
+        left = (w - new_w) // 2
+        img = img[:, left:left + new_w]
+    ok, buf = cv2.imencode(".png", img)
+    return buf.tobytes() if ok else data
+
+
 def _shape(d: ImageDecision) -> tuple[list, list, list]:
     """Turn a decision into per criterion lists plus corrective feedback."""
     tech_raw = getattr(d, "technical_scores", {}) or {}
@@ -196,7 +336,8 @@ def _shape(d: ImageDecision) -> tuple[list, list, list]:
     return technical, semantic, feedback
 
 
-def _framing_check(img, T) -> tuple[float, str]:
+def _framing_check(img, T, min_area: float = None, max_area: float = None,
+                   allow_edges: bool = False, info: dict | None = None) -> tuple[float, str]:
     """Cheap composition check for live guidance.
 
     Returns a score and, when it fails, the single most useful instruction.
@@ -215,13 +356,37 @@ def _framing_check(img, T) -> tuple[float, str]:
 
     This is a guidance proxy, not a framework criterion. Composition is scored
     properly by the semantic evaluator after capture.
+
+    `info`, if given, receives what was measured (area, the product's extent
+    from the centre, whether it is cut off), for the auto zoom hint (v1.1.0).
     """
     import numpy as np
     import cv2
 
     try:
-        near_white = np.all(img >= config.T3_WHITE_THRESHOLD, axis=2)
-        mask = ~near_white
+        # Background estimated from the border, as the framework now does, so a
+        # light grey lightbox background is not mistaken for product touching
+        # every edge (2026-10-05). No central fallback here on purpose: this
+        # check exists to catch a product that is too small.
+        hh, ww = img.shape[:2]
+        bb = max(2, int(min(hh, ww) * config.T3_BORDER_FRACTION))
+        border = np.concatenate([img[:bb].reshape(-1, 3), img[-bb:].reshape(-1, 3),
+                                 img[:, :bb].reshape(-1, 3), img[:, -bb:].reshape(-1, 3)])
+        bg = np.median(border, axis=0)
+        spread = np.median(np.abs(border - bg), axis=0).max()
+        # A detail close up fills the frame, so its border IS the product, not a
+        # plain light background. That is the intended framing for a detail shot.
+        if allow_edges and (float(bg.mean()) < GUIDANCE_BG_GREY_MIN
+                            or float(spread) > GUIDANCE_BG_UNIFORM_SPREAD / 2):
+            return 1.0, ""
+        delta = min(config.PRODUCT_BG_DELTA_MAX,
+                max(config.PRODUCT_BG_DELTA_MIN, config.PRODUCT_BG_DELTA_K * float(spread)))
+        matching = (np.abs(border.astype(np.int16) - bg.astype(np.int16)).max(axis=1)
+                <= config.PRODUCT_BG_DELTA_MIN).mean()
+        if matching < config.PRODUCT_BG_MIN_MATCH:
+            mask = ~np.all(img >= config.T3_WHITE_THRESHOLD, axis=2)   # border is product
+        else:
+            mask = np.abs(img.astype(np.int16) - bg.astype(np.int16)).max(axis=2) > delta
         kernel = np.ones((5, 5), np.uint8)
         mask = cv2.morphologyEx(
             mask.astype(np.uint8), cv2.MORPH_OPEN, kernel).astype(bool)
@@ -230,6 +395,8 @@ def _framing_check(img, T) -> tuple[float, str]:
 
     h, w = mask.shape[:2]
     area = float(mask.mean())
+    min_area = GUIDANCE_MIN_PRODUCT_AREA if min_area is None else min_area
+    max_area = GUIDANCE_MAX_PRODUCT_AREA if max_area is None else max_area
 
     if area < 0.004:
         return 0.0, "Point the camera at your product."
@@ -240,17 +407,25 @@ def _framing_check(img, T) -> tuple[float, str]:
         return 0.0, "Point the camera at your product."
     top, bottom = np.where(rows)[0][[0, -1]]
     left, right = np.where(cols)[0][[0, -1]]
+    if info is not None:
+        # how far the product reaches from the centre, as a share of half the
+        # frame (1.0 = touching the edge); zooming by k multiplies this by k
+        info["area"] = area
+        info["reach"] = max(abs(left / w - 0.5), abs((right + 1) / w - 0.5),
+                            abs(top / h - 0.5), abs((bottom + 1) / h - 0.5)) * 2.0
 
     # Cut off. A small margin avoids flagging a product that merely sits close
     # to the edge without crossing it.
     m = max(2, int(min(h, w) * 0.02))
-    if top <= m or left <= m or bottom >= h - 1 - m or right >= w - 1 - m:
+    if not allow_edges and (top <= m or left <= m or bottom >= h - 1 - m or right >= w - 1 - m):
+        if info is not None:
+            info["cut_off"] = True
         return 0.10, "Part of the product is cut off. Move back a little."
 
-    if area < GUIDANCE_MIN_PRODUCT_AREA:
+    if area < min_area:
         return 0.15, "Move closer. The product is too small in the frame."
 
-    if area > GUIDANCE_MAX_PRODUCT_AREA:
+    if area > max_area:
         return 0.25, "Move back slightly. Leave a little space around the product."
 
     # Off centre, measured from the centroid of the product region as a
@@ -269,18 +444,58 @@ def _framing_check(img, T) -> tuple[float, str]:
     return 1.0, ""
 
 
+def _zoom_hint(info: dict, shot: str, min_area: float, max_area: float) -> float:
+    """Zoom factor (relative to the current zoom) for the live auto zoom.
+
+    Acts only when the size is OUTSIDE the shot's allowed range, and then aims at
+    the middle of it, so the zoom does not hunt around a limit. Zooming in is
+    capped so the product never gets closer to an edge than
+    GUIDANCE_ZOOM_EDGE_LIMIT (zoom is about the centre, so an off centre product
+    would otherwise be pushed out of the frame). A cut off product asks for a
+    small zoom out; the app ignores that when it is already at its widest.
+    Never calls the model; computed from the framing check's own measurement.
+    """
+    if info.get("cut_off"):
+        return 0.85
+    area, reach = info.get("area"), info.get("reach")
+    if not area or not reach or min_area <= area <= max_area:
+        return 1.0
+    k = (GUIDANCE_ZOOM_TARGET_AREA.get(shot, 0.32) / area) ** 0.5   # area grows with k^2
+    if k > 1.0:
+        k = min(k, GUIDANCE_ZOOM_EDGE_LIMIT / reach)
+    k = max(0.5, min(2.0, k))
+    return 1.0 if abs(k - 1.0) < GUIDANCE_ZOOM_MIN_STEP else round(k, 3)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 @app.get("/health")
 def health():
+    # Video readiness, so the app and the operator can see at a glance why video
+    # is unavailable: ffmpeg missing, or no music installed (added 2026-10-05).
+    from pathlib import Path as _Path
+    from ..video import audio as _A
+    from ..video.builder import ffmpeg_available
+    # Per mood, and whether any generated test tone is still offered (v1.1.0).
+    _base = _Path(__file__).resolve().parents[2]
+    try:
+        _music_tracks = _A.tracks_per_mood(_base)
+        _test_tones = any(t.is_test_tone for t in _A.recommend(None, _base).tracks)
+    except Exception:
+        _music_tracks, _test_tones = {m: 0 for m in _A.MOODS}, False
     return {
         "status": "ok",
         "framework_version": getattr(config, "SPEC_VERSION", "1.3"),
         "semantic_model": getattr(config, "GEMINI_MODEL", "unknown"),
+        "semantic_mode": _semantic_mode(),
+        "metrics": __import__("backend.pqf.technical", fromlist=["metric_status"]).metric_status(),
         "fqs_alpha": config.FQS_ALPHA,
         "fqs_beta": config.FQS_BETA,
         "fqs_pass_threshold": config.FQS_PASS_THRESHOLD,
+        "video_ready": ffmpeg_available(),
+        "music_tracks": _music_tracks,
+        "test_tones": _test_tones,
     }
 
 
@@ -310,7 +525,7 @@ def criteria():
 def score(file: UploadFile = File(...)):
     """Full framework evaluation of one image. Costs one semantic model call."""
     t0 = time.time()
-    data = _read_upload(file)
+    data = _platform_format(_read_upload(file))
     d = score_image(data, path=file.filename, mime=file.content_type)
     technical, semantic, feedback = _shape(d)
     return ScoreResponse(
@@ -322,7 +537,9 @@ def score(file: UploadFile = File(...)):
 
 
 @app.post("/guidance", response_model=GuidanceResponse)
-def guidance(file: UploadFile = File(...)):
+def guidance(file: UploadFile = File(...),
+             shot: str = Form("main"),
+             rotation: int = Form(0)):
     """Fast pre capture check. Cheap deterministic criteria only.
 
     Runs sharpness, exposure and background, which are the faults a user can
@@ -346,6 +563,20 @@ def guidance(file: UploadFile = File(...)):
     if img is None:
         raise HTTPException(400, "Could not decode the image.")
 
+    # Upright the frame if the client sends it in sensor orientation.
+    rot = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+           270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(int(rotation) % 360)
+    if rot is not None:
+        img = cv2.rotate(img, rot)
+
+    # Check only the region that will be scored. The captured photo is centre
+    # cropped to 4:5 before scoring, so the strips above and below are thrown
+    # away; judging them made a well placed product read as cut off and the
+    # background as dirty whenever the room showed at the top or bottom.
+    img = _crop_to_platform(img)
+    shot = shot if shot in GUIDANCE_SHOT_FRAMING else "main"
+    min_area, max_area, allow_edges = GUIDANCE_SHOT_FRAMING[shot]
+
     # Reduced working size for live use. Sharpness is resolution dependent, so
     # the threshold below is deliberately lower than the scoring threshold.
     h, w = img.shape[:2]
@@ -359,9 +590,12 @@ def guidance(file: UploadFile = File(...)):
                           ("exposure", T.t2_exposure, GUIDANCE_PASS_MIN),
                           ("background", T.t3_background, GUIDANCE_PASS_MIN)):
         s = float(fn(img))
+        # A detail close up has no background to speak of, so background is
+        # reported but does not block a detail shot in live guidance.
+        ok = True if (shot == "detail" and name == "background") else s >= thr
         checks.append(CriterionScore(name=name, score=round(s, 3),
                                      weight=config.TQS_WEIGHTS[name],
-                                     passed=s >= thr))
+                                     passed=ok))
 
     # Framing. Without this, a badly composed shot shows three green lights,
     # because the other three criteria say nothing about where the product sits
@@ -369,22 +603,39 @@ def guidance(file: UploadFile = File(...)):
     # semantic criterion after capture. This is a cheap deterministic proxy for
     # live use only, computed from the same product region the technical
     # criteria already use, so it introduces no new criterion to the framework.
-    framing_score, framing_msg = _framing_check(img, T)
+    framing_info = {}
+    framing_score, framing_msg = _framing_check(img, T, min_area, max_area, allow_edges,
+                                                framing_info)
+    zoom_hint = _zoom_hint(framing_info, shot, min_area, max_area)
     checks.append(CriterionScore(name="framing", score=round(framing_score, 3),
                                  weight=0.0,
                                  passed=framing_score >= GUIDANCE_PASS_MIN))
+
+    exposure_hint = 0
+    bg_failed = any(c.name == "background" and c.passed is False for c in checks)
+    bg_grey = bg_failed and _background_diagnosis(img) == "grey"
+    exp = next((c for c in checks if c.name == "exposure"), None)
+    if bg_grey and (exp is None or exp.score >= GUIDANCE_PASS_MIN):
+        exposure_hint = 1     # brighten, product exposure allows it
+    elif exp is not None and exp.passed is False:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        exposure_hint = 1 if float(gray.mean()) < config.T2_IDEAL_LOW else -1
 
     feedback = []
     for c in checks:
         if c.passed is False:
             if c.name == "framing" and framing_msg:
                 feedback.append(framing_msg)
+            elif c.name == "background" and bg_grey:
+                feedback.append(GREY_BACKGROUND_MSG)
             elif c.name in FEEDBACK:
                 feedback.append(FEEDBACK[c.name])
     return GuidanceResponse(
         ready=all(c.passed for c in checks),
         checks=checks, feedback=feedback,
         elapsed_ms=int((time.time() - t0) * 1000),
+        exposure_hint=exposure_hint,
+        zoom_hint=zoom_hint,
     )
 
 
@@ -397,21 +648,53 @@ def batch(files: List[UploadFile] = File(..., media_type="multipart/form-data"))
     if len(files) > 24:
         raise HTTPException(413, "Too many images. Send 24 or fewer.")
 
-    payload = [(_read_upload(f), f.filename or f"image_{i}")
+    payload = [(_platform_format(_read_upload(f)), f.filename or f"image_{i}")
                for i, f in enumerate(files)]
     result = process_batch(payload)
 
     index_of = {id(d): i for i, d in enumerate(result.all_decisions)}
+
+    def _weakest(d) -> str:
+        """The single lowest scoring criterion, which is what to fix first.
+
+        A hard-rejected image has no semantic scores, so its weakest criterion
+        is the lowest TECHNICAL one. This must never be empty for such an image:
+        a rejected photo with no reason is exactly the one the user most needs
+        explained, which is why it previously showed only "Retake this one"
+        (fixed 2026-10-05).
+        """
+        tech = dict(getattr(d, "technical_scores", {}) or {})
+        sem = dict(d.semantic_scores or {})
+        # For a hard reject use the technical scores alone; otherwise combine.
+        scores = tech if (getattr(d, "hard_rejected", False) and tech) \
+            else {**tech, **sem}
+        if not scores:
+            return ""
+        return min(scores.items(), key=lambda kv: kv[1])[0]
+
+    # Report every image, not only the selected ones. An image that was left out
+    # is exactly the one the user most wants explained.
     selected = [
-        BatchImageResult(index=index_of.get(id(d), -1),
-                         fqs=round(d.fqs, 3), role=d.role, passed=d.passed)
-        for d in result.selected
+        BatchImageResult(
+            index=i,
+            fqs=round(d.fqs, 3),
+            tqs=round(d.tqs, 3),
+            sqs=round(d.sqs, 3),
+            role=d.role,
+            passed=d.passed,
+            reason=d.reason,
+            weakest=_weakest(d),
+        )
+        for i, d in enumerate(result.all_decisions)
     ]
     role_sets = {
         role: [getattr(d, "path", "") for d in items]
         for role, items in result.role_sets.items()
     }
-    return BatchResponse(
+    from .batch_explain import explain_batch
+    _extra = explain_batch(result, FEEDBACK, config.SQS_PASS_THRESHOLDS)
+    return BatchResponse(images=_extra["images"], missing=_extra["missing"],
+                         
         certified=result.certified, selected=selected, role_sets=role_sets,
         recapture=result.recapture, elapsed_ms=int((time.time() - t0) * 1000),
     )
@@ -524,3 +807,143 @@ def test_page():
     provides a working multi file picker and shows the verdict clearly.
     """
     return _TEST_PAGE
+
+# ---------------------------------------------------------------------------
+# Video, Layer 3
+# ---------------------------------------------------------------------------
+@app.get("/music")
+def music(category: str | None = None):
+    """Recommend an audio mood and list the tracks available.
+
+    The framework recommends and explains. The owner chooses. It never selects
+    music automatically, because an automatically decided correct track is a
+    subjective judgement with no ground truth to validate against, and because
+    attaching arbitrary music to publishable content raises licensing exposure.
+    """
+    from pathlib import Path
+    from ..video import audio as A
+
+    base = Path(__file__).resolve().parents[2]
+    rec = A.recommend(category, base)
+    return {
+        "recommended_mood": rec.mood,
+        "reason": rec.reason,
+        "mood_descriptions": A.MOODS,
+        "tracks": [
+            {"id": t.id, "title": t.title, "mood": t.mood,
+             "recommended": t.mood == rec.mood, "attribution": t.attribution}
+            for t in rec.tracks
+        ],
+        "note": "Audio is recommended as audience appropriate. No claim is made "
+                "that it is optimal or that it will improve sales.",
+    }
+
+
+@app.get("/music/preview/{track_id}")
+def music_preview(track_id: str):
+    """Stream one track so the owner can HEAR it before choosing (2026-10-05).
+
+    The owner confirms the music, so they must be able to listen first.
+    Unknown or missing tracks are a 404, never a silent substitute.
+    """
+    from pathlib import Path
+    from ..video import audio as A
+    base = Path(__file__).resolve().parents[2]
+    path = A.resolve_track(track_id, base)
+    if path is None:
+        raise HTTPException(404, "That music track is not available.")
+    return FileResponse(path=str(path), media_type="audio/mpeg",
+                        filename=path.name)
+
+
+@app.post("/video")
+def video(
+    files: List[UploadFile] = File(...),
+    roles: str = Form(""),
+    format: str = Form("square"),
+    track_id: str = Form(""),
+    motion: bool = Form(True),
+):
+    """Assemble certified images into a marketing video.
+
+    Images are ordered by role, meaning the main shot leads, angles follow, and
+    the detail shot comes late. That order is decided by the framework's role
+    classifier, so the structure of the video follows from the standard rather
+    than from upload order.
+
+    No video content is generated. Every frame derives from a photograph the
+    framework certified, which is what keeps the quality guarantee meaningful
+    through to the final output.
+    """
+    import tempfile
+    from pathlib import Path
+    from ..video import audio as A
+    from ..video.builder import build_video, ffmpeg_available, ROLE_ORDER
+
+    if not ffmpeg_available():
+        raise HTTPException(
+            503, "Video assembly is unavailable because ffmpeg is not installed.")
+    if not files:
+        raise HTTPException(400, "No images received.")
+    if len(files) > 8:
+        raise HTTPException(413, "Too many images. Send eight or fewer.")
+
+    base = Path(__file__).resolve().parents[2]
+    tmp = Path(tempfile.mkdtemp(prefix="pqf_video_"))
+
+    role_list = [r.strip() for r in roles.split(",")] if roles else []
+    saved = []
+    for i, f in enumerate(files):
+        data = _read_upload(f)
+        p = tmp / f"img_{i:02d}.jpg"
+        p.write_bytes(data)
+        role = role_list[i] if i < len(role_list) else "hero_shot"
+        saved.append((role, p))
+
+    # Order by role. Anything with an unrecognised role goes last rather than
+    # being discarded, since dropping a user's image without saying so would be
+    # worse than including it.
+    ordered = []
+    for role in ROLE_ORDER:
+        ordered += [p for r, p in saved if r == role]
+    ordered += [p for r, p in saved if r not in ROLE_ORDER]
+
+    if not ordered:
+        raise HTTPException(400, "No usable images after ordering.")
+
+    audio_path = A.resolve_track(track_id, base) if track_id else None
+    if track_id and audio_path is None:
+        # Never return a silent video when music was chosen (2026-10-05).
+        raise HTTPException(
+            404, "That music track is not available. Choose another track.")
+    out = tmp / "marketing_video.mp4"
+
+    try:
+        result = build_video(
+            ordered, out,
+            format_name=format if format in ("square", "vertical") else "square",
+            audio_path=audio_path,
+            motion=motion,
+        )
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+    return FileResponse(
+        path=str(result.path),
+        media_type="video/mp4",
+        filename="marketing_video.mp4",
+        headers={
+            "X-Video-Duration": str(result.duration_seconds),
+            "X-Video-Images": str(result.image_count),
+            "X-Video-Format": result.format_name,
+            "X-Video-Audio": "1" if result.has_audio else "0",
+        },
+    )
+
+# Automatic marketing video: /video/plan, /video/render (2026-10-06).
+from .video_api import router as video_router  # noqa: E402
+app.include_router(video_router)
+
+# Study sessions for the evaluation: POST /study/log (v1.1.0).
+from .study_api import router as study_router  # noqa: E402
+app.include_router(study_router)

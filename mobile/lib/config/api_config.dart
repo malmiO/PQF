@@ -60,8 +60,10 @@ class ApiConfig {
   }
 
   /// How often a live guidance frame is sent. Raise if the preview stutters.
+  /// The floor is 500 ms so frames are never sent faster than that (combined
+  /// with the single in-flight guard, this bounds the camera's memory churn).
   static Duration get guidanceInterval =>
-      Duration(milliseconds: _int('PQF_GUIDANCE_INTERVAL_MS', 700, 200, 3000));
+      Duration(milliseconds: _int('PQF_GUIDANCE_INTERVAL_MS', 700, 500, 3000));
 
   /// Abandon a guidance frame after this long. A dropped frame is harmless.
   static Duration get guidanceTimeout =>
@@ -70,6 +72,33 @@ class ApiConfig {
   /// Batch scoring calls the semantic model once per image, so allow plenty.
   static Duration get batchTimeout =>
       Duration(milliseconds: _int('PQF_BATCH_TIMEOUT_MS', 180000, 30000, 600000));
+
+  /// Video assembly runs ffmpeg on the server, which takes several seconds per
+  /// image. At least 120 seconds, so a larger set does not time out.
+  static Duration get videoTimeout =>
+      Duration(milliseconds: _int('PQF_VIDEO_TIMEOUT_MS', 180000, 120000, 600000));
+
+  /// POST /video/plan uploads the set and asks the model once where the
+  /// features are, so allow up to a minute.
+  static Duration get videoPlanTimeout =>
+      Duration(milliseconds: _int('PQF_VIDEO_PLAN_TIMEOUT_MS', 60000, 30000, 300000));
+
+  /// The 4 digit PIN that opens study mode (PQF_STUDY_PIN). Null, or anything
+  /// that is not 4 digits, means study mode cannot be opened.
+  static String? get studyPin {
+    final v = _get('PQF_STUDY_PIN');
+    return (v != null && RegExp(r'^\d{4}$').hasMatch(v)) ? v : null;
+  }
+
+  /// Shared token for a deployed server (PQF_API_TOKEN), sent as X-PQF-Token.
+  /// The server only checks it when its own PQF_API_TOKEN is set.
+  static String? get apiToken => _get('PQF_API_TOKEN');
+
+  /// Headers every request carries.
+  static Map<String, String> get authHeaders {
+    final t = apiToken;
+    return t == null ? const {} : {'X-PQF-Token': t};
+  }
 
   /// Shown on the home screen so the configured target is visible at a glance.
   static String get displayTarget {

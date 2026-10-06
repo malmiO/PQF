@@ -31,6 +31,22 @@ class ShotStep {
     required this.why,
     required this.intendedRole,
   });
+
+  /// The shot type sent to POST /guidance (main | angle | detail | extra), so
+  /// live guidance applies the right per shot framing. Derived from the
+  /// intended role; it never tells the framework what role to assign.
+  String get shotType {
+    switch (intendedRole) {
+      case 'hero_shot':
+        return 'main';
+      case 'angle_shot':
+        return 'angle';
+      case 'detail_shot':
+        return 'detail';
+      default:
+        return 'extra';
+    }
+  }
 }
 
 class ShotPlan {
@@ -81,12 +97,40 @@ class ShotPlan {
   static bool isComplete(int captured) => captured >= requiredCount;
 
   /// Confirmation shown immediately after a capture, before the next
-  /// instruction. Brief, because the user wants to keep moving.
-  static String confirmation(int justCaptured) {
-    if (justCaptured >= steps.length) return 'That is everything. Well done.';
-    if (justCaptured == requiredCount) {
+  /// instruction. Brief, because the user wants to keep moving. [plan] and
+  /// [required] default to the full sequence.
+  static String confirmation(int justCaptured,
+      {List<ShotStep> plan = steps, int required = requiredCount}) {
+    if (justCaptured >= plan.length) return 'That is everything. Well done.';
+    if (justCaptured == required) {
       return 'You have everything you need. Finish now, or take one more.';
     }
-    return 'Got it. Next, ${steps[justCaptured].label.toLowerCase()}.';
+    return 'Got it. Next, ${plan[justCaptured].label.toLowerCase()}.';
+  }
+
+  /// A plan of ONLY the shots the server says are missing, in the order
+  /// main, angles, detail, reusing the step texts above for each role. [missing]
+  /// is a list of (role, count). Every step is required; there is no extra.
+  static List<ShotStep> forMissing(List<(String, int)> missing) {
+    final plan = <ShotStep>[];
+    for (final role in const ['hero_shot', 'angle_shot', 'detail_shot']) {
+      final count = missing
+          .where((m) => m.$1 == role)
+          .fold<int>(0, (sum, m) => sum + m.$2);
+      if (count <= 0) continue;
+      final texts = steps.where((s) => s.intendedRole == role).toList();
+      for (var i = 0; i < count; i++) {
+        final s = texts[i % texts.length];
+        plan.add(count == 1 && role == 'angle_shot'
+            // One angle: "Angle 1" would suggest a second is coming.
+            ? ShotStep(
+                label: 'Angle',
+                instruction: s.instruction,
+                why: s.why,
+                intendedRole: s.intendedRole)
+            : s);
+      }
+    }
+    return plan;
   }
 }

@@ -130,8 +130,6 @@ def evaluate_semantic(image_bytes: bytes, mime: str = "image/jpeg") -> SemanticR
     if os.environ.get("PQF_SEMANTIC_MOCK") == "1":
         return _mock_evaluate(image_bytes)
     if not os.environ.get("GEMINI_API_KEY"):
-        # graceful fallback: mock, clearly flagged, so batch runs don't die
-        r = _mock_evaluate(image_bytes)
-        r.justification = "[mock — no API key] " + r.justification
-        return r
+        # NO silent fallback (2026-10-01). Mock is opt in via PQF_SEMANTIC_MOCK=1.
+        return SemanticResult(ok=False, error="GEMINI_API_KEY not set")
     return _gemini_evaluate(image_bytes, mime)

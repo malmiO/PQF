@@ -35,24 +35,46 @@ def t0_compliance(img: np.ndarray) -> bool:
 def product_mask(img: np.ndarray) -> np.ndarray:
     """Boolean mask, True on pixels judged to belong to the product.
 
-    Catalogue composition means the product sits against a plain light
-    background. Pixels that are NOT near-white are therefore taken as product.
-    A morphological close fills small gaps, for example specular highlights on a
-    glossy product that read as near-white.
+    The background colour is ESTIMATED from the image border (median of the
+    border band) and pixels that differ clearly from it are taken as product.
+    The first version used a fixed near-white threshold, which failed on a real
+    budget lightbox: its background reads light grey (about 200 of 255), so 99
+    percent of the frame was taken as "product" and sharpness and exposure were
+    measured over the smooth background (found 2026-10-05). On a true white
+    background the estimate is near white and the result matches the old rule.
 
-    Falls back to the central region when segmentation finds too little, which
-    protects against an unusual image producing an empty mask.
+    This changes only WHERE the product is measured. Whether the background is
+    acceptably white is still judged by T3 against the fixed platform standard.
+
+    Falls back to the central region when segmentation finds too little or
+    nearly everything, so a failed segmentation is never silently measured.
     """
-    near_white = np.all(img >= config.T3_WHITE_THRESHOLD, axis=2)
-    prod = ~near_white
+    h, w = img.shape[:2]
+    b = max(2, int(min(h, w) * config.T3_BORDER_FRACTION))
+    border = np.concatenate([img[:b].reshape(-1, 3), img[-b:].reshape(-1, 3),
+                             img[:, :b].reshape(-1, 3), img[:, -b:].reshape(-1, 3)])
+    bg = np.median(border, axis=0)                                # estimated background
+    spread = np.median(np.abs(border - bg), axis=0).max()         # how uneven it is
+    delta = min(config.PRODUCT_BG_DELTA_MAX,
+                max(config.PRODUCT_BG_DELTA_MIN, config.PRODUCT_BG_DELTA_K * float(spread)))
+    matching = (np.abs(border.astype(np.int16) - bg.astype(np.int16)).max(axis=1)
+                <= config.PRODUCT_BG_DELTA_MIN).mean()
+    if matching < config.PRODUCT_BG_MIN_MATCH:
+        # The border is not a plain background (a close up whose product covers
+        # the edges). The estimate is meaningless, so use the original rule.
+        prod = ~np.all(img >= config.T3_WHITE_THRESHOLD, axis=2)
+    else:
+        diff = np.abs(img.astype(np.int16) - bg.astype(np.int16)).max(axis=2)
+        prod = diff > delta
 
     # Close small holes so highlights inside the product are not lost.
     kernel = np.ones((7, 7), np.uint8)
     prod = cv2.morphologyEx(prod.astype(np.uint8), cv2.MORPH_CLOSE, kernel).astype(bool)
 
-    # Guard. If the product occupies an implausibly small fraction of the frame,
-    # fall back to the central area rather than measuring almost nothing.
-    if prod.mean() < config.PRODUCT_MIN_FRACTION:
+    # Guards. An implausibly small or large product means segmentation failed;
+    # measure the central area rather than almost nothing or the whole frame.
+    frac = prod.mean()
+    if frac < config.PRODUCT_MIN_FRACTION or frac > config.PRODUCT_MAX_FRACTION:
         prod = _central_mask(img.shape, config.PRODUCT_FALLBACK_FRACTION)
 
     return prod
@@ -168,12 +190,30 @@ def t3_background(img: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 # T4 — BRISQUE (lower raw is better)
 # ---------------------------------------------------------------------------
+_WARNED: set = set()
+
+
+def _warn_abstain(metric: str, err: Exception) -> None:
+    """Abstaining scores 1.0 and inflates TQS, so it must never be silent."""
+    if metric not in _WARNED:
+        _WARNED.add(metric)
+        import logging
+        logging.getLogger("pqf").warning(
+            "%s is ABSTAINING (scoring 1.0) because it failed: %r. "
+            "Fix the install before reporting any TQS.", metric, err)
+
+
+def metric_status() -> dict:
+    return {"abstaining": sorted(_WARNED)}
+
+
 def t4_brisque(img: np.ndarray) -> float:
     try:
         from brisque import BRISQUE
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         raw = BRISQUE().score(rgb)
-    except Exception:
+    except Exception as e:
+        _warn_abstain("T4 BRISQUE", e)
         # If the library/model is unavailable, abstain neutrally (documented).
         return 1.0
     return _clip01(1.0 - raw / config.T4_BRISQUE_MAX)
@@ -192,7 +232,8 @@ def t5_piqe(img: np.ndarray) -> float:
     """
     try:
         import pypiqe
-    except Exception:
+    except Exception as e:
+        _warn_abstain("T5 PIQE", e)
         return 1.0
 
     top, left, h, w = product_bbox(img)
@@ -207,7 +248,8 @@ def t5_piqe(img: np.ndarray) -> float:
         gray = _to_gray(crop)
         out = pypiqe.piqe(gray)
         raw = out[0] if isinstance(out, tuple) else out
-    except Exception:
+    except Exception as e:
+        _warn_abstain("T5 PIQE", e)
         return 1.0
 
     return _clip01(1.0 - float(raw) / config.T5_PIQE_MAX)
@@ -254,9 +296,14 @@ class TechnicalResult:
     hard_reject: bool = False
 
 
-def compute_tqs(img: np.ndarray) -> TechnicalResult:
-    """Run the full technical engine on a standardised image."""
-    if not t0_compliance(img):
+def compute_tqs(img: np.ndarray, check_gate: bool = True) -> TechnicalResult:
+    """Run the full technical engine on a standardised image.
+
+    T0 is a rule about the ORIGINAL image, so the pipeline checks it there and
+    calls this with check_gate=False. Re-checking on the standardised image
+    rejected every image wider than 1.6:1 (fixed 2026-10-01).
+    """
+    if check_gate and not t0_compliance(img):
         return TechnicalResult(passed_gate=False, hard_reject=True)
 
     scores = {

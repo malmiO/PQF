@@ -1,16 +1,23 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 
 import '../models/api_result.dart';
+import '../models/auto_zoom.dart';
 import '../models/shot_plan.dart';
 import '../services/pqf_api.dart';
 import '../services/frame_converter.dart';
 import '../widgets/guidance_overlay.dart';
 import '../widgets/error_view.dart';
+import '../widgets/help_sheet.dart';
+import '../models/study_session.dart';
+import '../services/study_log.dart';
 import 'results_screen.dart';
+import 'study_screens.dart';
 
 /// Guided capture.
 ///
@@ -27,9 +34,23 @@ import 'results_screen.dart';
 /// Guidance failures never interrupt the camera. A dropped frame keeps the
 /// previous reading, and only a sustained failure is surfaced.
 class CaptureScreen extends StatefulWidget {
-  final String productName;
+  final ProductDraft draft;
 
-  const CaptureScreen({super.key, required this.productName});
+  /// The shots to take. Null means the full [ShotPlan.steps]; otherwise only
+  /// these (the missing shots), all of them required.
+  final List<ShotStep>? plan;
+
+  /// When true, Done returns the captured photos to the caller (the results
+  /// screen checks them together with the photos that already passed) instead
+  /// of checking them here.
+  final bool returnPhotos;
+
+  const CaptureScreen({
+    super.key,
+    required this.draft,
+    this.plan,
+    this.returnPhotos = false,
+  });
 
   @override
   State<CaptureScreen> createState() => _CaptureScreenState();
@@ -37,12 +58,62 @@ class CaptureScreen extends StatefulWidget {
 
 class _CaptureScreenState extends State<CaptureScreen>
     with WidgetsBindingObserver {
+  List<ShotStep> get _steps => widget.plan ?? ShotPlan.steps;
+  int get _required =>
+      widget.plan == null ? ShotPlan.requiredCount : widget.plan!.length;
+  ShotStep _stepAt(int i) => _steps[i.clamp(0, _steps.length - 1)];
+
+  /// False only in the UNGUIDED study condition (v1.1.0): no /guidance calls,
+  /// no overlay, no briefings, no auto-capture. Same crop, resolution, zoom.
+  bool get _guided => GuidancePolicy.guided(StudySession.current);
+
   CameraController? _controller;
   final PqfApi _api = PqfApi();
 
   GuidanceResult _guidance = GuidanceResult.empty();
   bool _checkInFlight = false;
   DateTime _lastCheck = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Logs the decoded guidance frame's dimensions exactly once, to confirm
+  /// whether the camera delivers frames upright or in sensor orientation.
+  bool _loggedFrameDims = false;
+
+  // --- Exposure assist (2026-10-05) -------------------------------------
+  /// Current exposure compensation applied to the camera, in EV. A grey
+  /// lightbox background is fixed by raising this, the step a photographer
+  /// does by hand, so the app nudges it when the server hints and offers a
+  /// manual slider for the same control.
+  double _exposureOffset = 0.0;
+  double _minExposure = 0.0;
+  double _maxExposure = 0.0;
+  bool _exposureSupported = false;
+
+  // --- Zoom (2026-10-06) ------------------------------------------------
+  /// Camera zoom, shown as a slider like brightness. Lets the owner fill the
+  /// frame (a small item, a detail shot) without moving the phone closer and
+  /// losing focus. Digital zoom crops the sensor, so it is capped at
+  /// [maxZoomCap]: beyond that the photo gets soft and fails the sharpness check.
+  double _zoom = 1.0;
+  double _minZoom = 1.0;
+  double _maxZoom = 1.0;
+  bool _zoomSupported = false;
+  static const double maxZoomCap = 3.0;
+
+  // Auto zoom (v1.1.0): follows the server's zoom hint while Auto is on.
+  DateTime _lastZoomChange = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastAutoZoom = DateTime.fromMillisecondsSinceEpoch(0);
+  /// The owner moved the zoom slider during this shot: auto zoom stays out.
+  bool _manualZoomThisShot = false;
+  /// The current zoom was chosen by auto zoom (shown on the slider label).
+  bool _zoomIsAuto = false;
+  /// The highest zoom that keeps enough real detail on this camera
+  /// (AutoZoom.capFor); auto zoom stays below it, the label warns above it.
+  double _detailZoomCap = AutoZoom.autoCap;
+
+  /// One automatic exposure step every this long, so it does not oscillate.
+  static const double exposureStepEv = 0.3;
+  static const Duration exposureStepInterval = Duration(milliseconds: 1500);
+  DateTime _lastExposureStep = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Prints timing and scores for every guidance check. Leave on until the
   /// loop is confirmed working on a real device, then turn off.
@@ -66,7 +137,14 @@ class _CaptureScreenState extends State<CaptureScreen>
   /// exclude a momentary pass during movement.
   static const int stableFramesNeeded = 3;
 
+  /// A captured frame whose mean brightness (0..255) is below this is treated
+  /// as black and never sent for scoring.
+  static const int blackFrameThreshold = 20;
+
   bool _scoring = false;
+
+  /// Study mode: own picks were made for this capture (asked once).
+  bool _picksDone = false;
   bool _initialising = true;
   String? _cameraError;
 
@@ -89,6 +167,8 @@ class _CaptureScreenState extends State<CaptureScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _showBriefing = _guided;
+    _autoCapture = _guided;
     _startCamera();
   }
 
@@ -108,13 +188,49 @@ class _CaptureScreenState extends State<CaptureScreen>
       );
       final controller = CameraController(
         back,
-        ResolutionPreset.high,
+        ResolutionPreset.veryHigh,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.yuv420,
       );
       await controller.initialize();
       if (!mounted) return;
       _controller = controller;
+
+      // Read the exposure compensation range once. Some devices report an empty
+      // range (min == max == 0), meaning exposure control is unavailable.
+      try {
+        _minExposure = await controller.getMinExposureOffset();
+        _maxExposure = await controller.getMaxExposureOffset();
+        _exposureSupported = _maxExposure > _minExposure;
+        _exposureOffset = 0.0;
+        await controller.setExposureOffset(0.0);
+      } catch (e) {
+        _exposureSupported = false;
+        debugPrint('Exposure control unavailable on this device. $e');
+      }
+
+      // The photo's real resolution limits useful digital zoom (AutoZoom.capFor).
+      final ps = controller.value.previewSize;
+      if (ps != null) {
+        _detailZoomCap = AutoZoom.capFor(math.min(ps.width, ps.height));
+        debugPrint('[zoom] capture ${ps.width.toInt()}x${ps.height.toInt()}, '
+            'auto zoom up to ${_detailZoomCap.toStringAsFixed(2)}x');
+      }
+
+      // Zoom range, read once. A device with no zoom reports min == max.
+      try {
+        _minZoom = await controller.getMinZoomLevel();
+        _maxZoom = (await controller.getMaxZoomLevel())
+            .clamp(_minZoom, maxZoomCap)
+            .toDouble();
+        _zoomSupported = _maxZoom > _minZoom;
+        _zoom = _minZoom;
+        await controller.setZoomLevel(_zoom);
+      } catch (e) {
+        _zoomSupported = false;
+        debugPrint('Zoom unavailable on this device. $e');
+      }
+
       setState(() => _initialising = false);
       await controller.startImageStream(_onFrame);
     } on CameraException catch (e) {
@@ -135,6 +251,7 @@ class _CaptureScreenState extends State<CaptureScreen>
   }
 
   void _onFrame(CameraImage image) {
+    if (!_guided) return;              // UNGUIDED: never ask for guidance
     if (_checkInFlight || _scoring || _capturing || _showBriefing) return;
     final now = DateTime.now();
     if (now.difference(_lastCheck) < ApiConfig.guidanceInterval) return;
@@ -172,7 +289,22 @@ class _CaptureScreenState extends State<CaptureScreen>
       final jpeg = FrameConverter.convert(payload);
       final convertMs = DateTime.now().difference(started).inMilliseconds;
 
-      final result = await _api.guidance(jpeg);
+      // The camera stream delivers frames in SENSOR orientation (landscape:
+      // width > height) while the phone is held upright, so the server is told
+      // to upright them with the camera's sensorOrientation rather than
+      // rotating in Dart. Log the frame size once to confirm this on device.
+      final sensorOrientation = _controller?.description.sensorOrientation ?? 0;
+      if (!_loggedFrameDims) {
+        _loggedFrameDims = true;
+        final landscape = payload.width > payload.height;
+        debugPrint('[guidance] decoded frame ${payload.width}x${payload.height} '
+            '(${landscape ? "LANDSCAPE / sensor orientation" : "upright"}), '
+            'sensorOrientation=$sensorOrientation -> rotation sent');
+      }
+
+      final shot = _stepAt(_step).shotType;
+      final result =
+          await _api.guidance(jpeg, shot: shot, rotation: sensorOrientation);
       final totalMs = DateTime.now().difference(started).inMilliseconds;
 
       if (_diagnostics) {
@@ -190,7 +322,7 @@ class _CaptureScreenState extends State<CaptureScreen>
         }
       }
 
-      _applyGuidance(result);
+      _applyGuidance(result, started);
     } catch (e, st) {
       debugPrint('[guidance] threw after '
           '${DateTime.now().difference(started).inMilliseconds}ms. $e');
@@ -201,7 +333,7 @@ class _CaptureScreenState extends State<CaptureScreen>
     }
   }
 
-  void _applyGuidance(ApiResult<GuidanceResult> result) {
+  void _applyGuidance(ApiResult<GuidanceResult> result, DateTime sentAt) {
     if (!mounted) return;
 
     if (!result.ok) {
@@ -219,16 +351,112 @@ class _CaptureScreenState extends State<CaptureScreen>
     _warnedAboutConnection = false;
     final g = result.value!;
 
+    // A frame sent before the last zoom change settled shows the old zoom: it
+    // updates the lights but counts neither towards auto-capture nor as a
+    // reason to zoom again.
+    final stale = sentAt.isBefore(_lastZoomChange.add(AutoZoom.settle));
     setState(() {
       _guidance = g;
-      _stableFrames = g.ready ? _stableFrames + 1 : 0;
+      _stableFrames = (g.ready && !stale) ? _stableFrames + 1 : 0;
     });
+
+    _maybeApplyExposureHint(g.exposureHint);
+    if (!stale) _maybeApplyZoomHint(g.zoomHint);
 
     if (_autoCapture &&
         _stableFrames >= stableFramesNeeded &&
         !_capturing &&
-        _step < ShotPlan.steps.length) {
+        _step < _steps.length) {
       _capture(auto: true);
+    }
+  }
+
+  /// Applies the server's exposure hint (+1 brighten, -1 darken) as camera
+  /// exposure compensation, at most one step every [exposureStepInterval] so it
+  /// does not oscillate, kept within the device's supported range.
+  void _maybeApplyExposureHint(int hint) {
+    if (hint == 0 || !_exposureSupported) return;
+    final now = DateTime.now();
+    if (now.difference(_lastExposureStep) < exposureStepInterval) return;
+    final target = (_exposureOffset + hint * exposureStepEv)
+        .clamp(_minExposure, _maxExposure)
+        .toDouble();
+    if ((target - _exposureOffset).abs() < 0.001) return; // already at the limit
+    _lastExposureStep = now;
+    _setExposure(target);
+  }
+
+  /// Applies the server's zoom hint while Auto is on, at most once per
+  /// [AutoZoom.minInterval], never while the owner is zooming by hand this shot.
+  /// A change restarts the steady-frame count, so a photo is never taken before
+  /// focus has settled at the new zoom.
+  void _maybeApplyZoomHint(double hint) {
+    if (!_autoCapture || !_zoomSupported || _manualZoomThisShot || _capturing) return;
+    final now = DateTime.now();
+    if (now.difference(_lastAutoZoom) < AutoZoom.minInterval) return;
+    final next = AutoZoom.next(current: _zoom, hint: hint, min: _minZoom,
+        max: _maxZoom, cap: _detailZoomCap);
+    if (next == null) return;
+    _lastAutoZoom = now;
+    _stableFrames = 0;
+    _zoomIsAuto = true;
+    _setZoom(next);
+  }
+
+  /// Sets the camera exposure compensation and updates the on-screen label.
+  Future<void> _setExposure(double offset) async {
+    final c = _controller;
+    if (c == null || !_exposureSupported) return;
+    final clamped = offset.clamp(_minExposure, _maxExposure).toDouble();
+    try {
+      await c.setExposureOffset(clamped);
+      if (mounted) setState(() => _exposureOffset = clamped);
+    } catch (e) {
+      debugPrint('setExposureOffset failed. $e');
+    }
+  }
+
+  /// Resets exposure to neutral, used when moving to the next shot so each shot
+  /// starts from the camera's own metering.
+  /// Sets the camera zoom and updates the slider. The preview, the guidance
+  /// frames and the photo all use the same zoom, so guidance checks exactly
+  /// what will be captured.
+  Future<void> _setZoom(double level) async {
+    final c = _controller;
+    if (c == null || !_zoomSupported) return;
+    final clamped = level.clamp(_minZoom, _maxZoom).toDouble();
+    _lastZoomChange = DateTime.now();
+    try {
+      await c.setZoomLevel(clamped);
+      if (mounted) setState(() => _zoom = clamped);
+    } catch (e) {
+      debugPrint('setZoomLevel failed. $e');
+    }
+  }
+
+  void _resetExposure() {
+    if (!_exposureSupported) return;
+    _lastExposureStep = DateTime.fromMillisecondsSinceEpoch(0);
+    _setExposure(0.0);
+  }
+
+  /// Mean brightness (0..255) of a small thumbnail of the captured JPEG, or
+  /// null if it cannot be decoded. Used to catch a completely black frame.
+  double? _meanBrightness(Uint8List jpeg) {
+    try {
+      final decoded = img.decodeImage(jpeg);
+      if (decoded == null) return null;
+      final thumb = img.copyResize(decoded, width: 32);
+      var sum = 0.0;
+      var n = 0;
+      for (final p in thumb) {
+        sum += img.getLuminance(p);
+        n++;
+      }
+      return n == 0 ? null : sum / n;
+    } catch (e) {
+      debugPrint('Brightness check failed. $e');
+      return null;
     }
   }
 
@@ -269,13 +497,41 @@ class _CaptureScreenState extends State<CaptureScreen>
         file = await controller.takePicture();
       }
 
-      final bytes = await file.readAsBytes();
+      var bytes = await file.readAsBytes();
+
+      // Black frame guard. A capture sometimes comes back completely black.
+      // Never send a black frame for scoring: retry once, then warn and stop.
+      final b1 = _meanBrightness(bytes);
+      if (b1 != null && b1 < blackFrameThreshold) {
+        debugPrint('Captured frame is black (mean $b1). Retrying once.');
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        try {
+          final retry = await controller.takePicture();
+          bytes = await retry.readAsBytes();
+        } catch (e) {
+          debugPrint('Black-frame retry capture failed. $e');
+        }
+        final b2 = _meanBrightness(bytes);
+        if (b2 != null && b2 < blackFrameThreshold) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('The photo came out black. Check nothing is '
+                    'covering the camera and try again.')));
+          }
+          if (mounted) await controller.startImageStream(_onFrame);
+          return; // never add a black frame to the set
+        }
+      }
+
       if (!mounted) return;
 
       setState(() {
         _captured.add(bytes);
         _step = _captured.length;
-        _confirmation = ShotPlan.confirmation(_captured.length);
+        _confirmation = _guided
+            ? ShotPlan.confirmation(_captured.length,
+                plan: _steps, required: _required)
+            : 'Photo ${_captured.length} taken.';
       });
 
       // Brief confirmation over the preview, then the next shot's briefing.
@@ -284,12 +540,20 @@ class _CaptureScreenState extends State<CaptureScreen>
         if (!mounted) return;
         setState(() {
           _confirmation = null;
-          if (_step < ShotPlan.steps.length) {
-            _showBriefing = true;
+          if (_step < _steps.length) {
+            _showBriefing = _guided;
             _stableFrames = 0;
             _guidance = GuidanceResult.empty();
           }
         });
+        // Each shot starts from neutral exposure; the next grey background will
+        // raise it again on its own.
+        _resetExposure();
+        // Each shot also starts unzoomed, so a zoomed detail shot does not
+        // carry over into the next view; auto zoom is free to act again.
+        _manualZoomThisShot = false;
+        _zoomIsAuto = false;
+        _setZoom(_minZoom);
       });
 
       if (mounted) await controller.startImageStream(_onFrame);
@@ -309,7 +573,42 @@ class _CaptureScreenState extends State<CaptureScreen>
   }
 
   Future<void> _finish() async {
+    if (widget.returnPhotos) {
+      // The missing shots: the results screen checks them together with the
+      // photos that already passed.
+      if (_captured.isEmpty) return;
+      try {
+        await _controller?.stopImageStream();
+      } catch (_) {}
+      if (mounted) Navigator.of(context).pop(List<Uint8List>.of(_captured));
+      return;
+    }
     if (_captured.length < 2) return;
+
+    // Study mode: the participant picks their own set BEFORE any result is
+    // shown (v1.1.0). Leaving the picks screen returns to the camera.
+    final study = StudySession.current;
+    if (study != null && !_picksDone) {
+      try {
+        await _controller?.stopImageStream();
+      } catch (_) {}
+      study.captureEndAt = DateTime.now().toUtc();
+      StudyLog.log('capture_end',
+          {'photo_hashes': _captured.map(StudyLog.photoHash).toList()});
+      if (!mounted) return;
+      final picks = await Navigator.of(context).push<Map<String, Uint8List>>(
+          MaterialPageRoute(builder: (_) => OwnPicksScreen(photos: _captured)));
+      if (!mounted) return;
+      if (picks == null) {
+        try {
+          await _controller?.startImageStream(_onFrame);
+        } catch (_) {}
+        return;
+      }
+      _picksDone = true;
+      StudyLog.ownPicks(picks);
+    }
+
     setState(() => _scoring = true);
 
     try {
@@ -318,6 +617,7 @@ class _CaptureScreenState extends State<CaptureScreen>
 
     final result = await _api.batch(_captured);
     if (!mounted) return;
+    if (result.ok && study != null) StudyLog.batchResult(_captured, result.value!);
 
     if (!result.ok) {
       setState(() => _scoring = false);
@@ -343,9 +643,9 @@ class _CaptureScreenState extends State<CaptureScreen>
 
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => ResultsScreen(
-        productName: widget.productName,
+        draft: widget.draft,
         result: result.value!,
-        images: _captured,
+        images: List<Uint8List>.of(_captured),
       ),
     ));
 
@@ -428,8 +728,8 @@ class _CaptureScreenState extends State<CaptureScreen>
 
     final controller = _controller!;
     final done = _captured.length;
-    final step = ShotPlan.at(_step);
-    final canFinish = ShotPlan.isComplete(done);
+    final step = _stepAt(_step);
+    final canFinish = done >= _required;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -437,30 +737,71 @@ class _CaptureScreenState extends State<CaptureScreen>
         fit: StackFit.expand,
         children: [
           CameraPreview(controller),
-          const FramingGuide(),
+          ScoredRegionGuide(
+            guidance: _guidance,
+            waiting: _checkInFlight,
+            shotType: step.shotType,
+            neutral: !_guided,
+          ),
           SafeArea(
             child: Column(
               children: [
                 _TopBar(
-                  productName: widget.productName,
+                  productName: widget.draft.name,
                   autoCapture: _autoCapture,
-                  onToggleAuto: () =>
-                      setState(() => _autoCapture = !_autoCapture),
+                  // No auto-capture in the UNGUIDED condition: it needs guidance.
+                  onToggleAuto: _guided
+                      ? () => setState(() => _autoCapture = !_autoCapture)
+                      : null,
+                  onHelp: () => showHelpSheet(context, HelpTopic.capture),
                 ),
                 const SizedBox(height: 8),
-                _ShotProgress(captured: done),
+                if (_guided)
+                  _ShotProgress(steps: _steps, captured: done)
+                else
+                  _ShotReminder(label: '', count: done),
                 const Spacer(),
                 // A short reminder only. The full explanation was given on the
                 // briefing screen, so nothing large sits over the frame guide.
                 if (_confirmation != null)
                   _Confirmation(text: _confirmation!)
-                else
+                else if (_guided)
                   _ShotReminder(label: step.label),
                 const SizedBox(height: 12),
-                GuidanceOverlay(
-                  guidance: _guidance,
-                  waitingForServer: _checkInFlight,
-                ),
+                if (_guided)
+                  GuidanceOverlay(
+                    guidance: _guidance,
+                    waitingForServer: _checkInFlight,
+                  ),
+                if (_exposureSupported) ...[
+                  const SizedBox(height: 10),
+                  _BrightnessControl(
+                    offset: _exposureOffset,
+                    min: _minExposure,
+                    max: _maxExposure,
+                    onChanged: (v) {
+                      // Pause the automatic stepping while the user adjusts.
+                      _lastExposureStep = DateTime.now();
+                      _setExposure(v);
+                    },
+                  ),
+                ],
+                if (_zoomSupported) ...[
+                  const SizedBox(height: 8),
+                  _ZoomControl(
+                    zoom: _zoom,
+                    min: _minZoom,
+                    max: _maxZoom,
+                    auto: _zoomIsAuto,
+                    soft: _zoom > _detailZoomCap + 0.01,
+                    onChanged: (v) {
+                      // The owner takes over the zoom for this shot.
+                      _manualZoomThisShot = true;
+                      _zoomIsAuto = false;
+                      _setZoom(v);
+                    },
+                  ),
+                ],
                 const SizedBox(height: 18),
                 _Controls(
                   canUndo: done > 0,
@@ -483,8 +824,8 @@ class _CaptureScreenState extends State<CaptureScreen>
             _Briefing(
               step: step,
               shotNumber: _step + 1,
-              total: ShotPlan.steps.length,
-              optional: ShotPlan.isOptional(_step),
+              total: _steps.length,
+              optional: _step >= _required,
               canFinishInstead: canFinish,
               onReady: () => setState(() {
                 _showBriefing = false;
@@ -519,15 +860,130 @@ class _CaptureScreenState extends State<CaptureScreen>
   }
 }
 
+/// Manual brightness (exposure compensation) slider, shown near the indicators.
+/// Photographers teach exactly this "slide the brightness up" step, so it is
+/// visible whenever the device supports exposure control. The same offset the
+/// automatic hint adjusts.
+class _BrightnessControl extends StatelessWidget {
+  final double offset;
+  final double min;
+  final double max;
+  final ValueChanged<double> onChanged;
+
+  const _BrightnessControl({
+    required this.offset,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final label = offset >= 0
+        ? '+${offset.toStringAsFixed(1)}'
+        : offset.toStringAsFixed(1);
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.only(left: 14, right: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.wb_sunny_outlined, color: Colors.white, size: 18),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 104,
+            child: Text('Brightness $label',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600)),
+          ),
+          Expanded(
+            child: Slider(
+              value: offset.clamp(min, max),
+              min: min,
+              max: max,
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Zoom slider, styled like the brightness control.
+class _ZoomControl extends StatelessWidget {
+  final double zoom;
+  final double min;
+  final double max;
+
+  /// The zoom was set by auto zoom; the label says so.
+  final bool auto;
+
+  /// Zoomed past what the camera's resolution supports: the label turns amber,
+  /// because the photo will come out soft. Moving closer keeps the detail.
+  final bool soft;
+  final ValueChanged<double> onChanged;
+
+  const _ZoomControl({
+    required this.zoom,
+    required this.min,
+    required this.max,
+    this.auto = false,
+    this.soft = false,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.only(left: 14, right: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.zoom_in, color: Colors.white, size: 18),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 116,
+            child: Text('${auto ? 'Auto zoom' : 'Zoom'} ${zoom.toStringAsFixed(1)}x',
+                style: TextStyle(
+                    color: soft ? Colors.amber.shade300 : Colors.white,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600)),
+          ),
+          Expanded(
+            child: Slider(
+              value: zoom.clamp(min, max),
+              min: min,
+              max: max,
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _TopBar extends StatelessWidget {
   final String productName;
   final bool autoCapture;
-  final VoidCallback onToggleAuto;
+  final VoidCallback? onToggleAuto;
+  final VoidCallback onHelp;
 
   const _TopBar({
     required this.productName,
     required this.autoCapture,
     required this.onToggleAuto,
+    required this.onHelp,
   });
 
   @override
@@ -549,7 +1005,7 @@ class _TopBar extends StatelessWidget {
         ),
         // Auto capture is a user choice, not something imposed. Someone
         // photographing a difficult item may want full manual control.
-        GestureDetector(
+        if (onToggleAuto != null) GestureDetector(
           onTap: onToggleAuto,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
@@ -567,6 +1023,19 @@ class _TopBar extends StatelessWidget {
             ]),
           ),
         ),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: onHelp,
+          child: Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              shape: BoxShape.circle,
+            ),
+            child:
+                const Icon(Icons.help_outline, color: Colors.white, size: 18),
+          ),
+        ),
       ]),
     );
   }
@@ -574,15 +1043,16 @@ class _TopBar extends StatelessWidget {
 
 /// Progress strip showing which shots are done and which remain.
 class _ShotProgress extends StatelessWidget {
+  final List<ShotStep> steps;
   final int captured;
 
-  const _ShotProgress({required this.captured});
+  const _ShotProgress({required this.steps, required this.captured});
 
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(ShotPlan.steps.length, (i) {
+      children: List.generate(steps.length, (i) {
         final done = i < captured;
         final current = i == captured;
         return Container(
@@ -603,7 +1073,7 @@ class _ShotProgress extends StatelessWidget {
                 child: Icon(Icons.check, size: 12, color: Colors.white),
               ),
             Text(
-              ShotPlan.steps[i].label,
+              steps[i].label,
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: current ? FontWeight.w700 : FontWeight.w500,
@@ -624,7 +1094,10 @@ class _ShotProgress extends StatelessWidget {
 class _ShotReminder extends StatelessWidget {
   final String label;
 
-  const _ShotReminder({required this.label});
+  /// Unguided study condition: show only how many photos were taken.
+  final int? count;
+
+  const _ShotReminder({required this.label, this.count});
 
   @override
   Widget build(BuildContext context) {
@@ -635,7 +1108,9 @@ class _ShotReminder extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
       ),
       child: Text(
-        'Taking the ${label.toLowerCase()} shot',
+        count != null
+            ? '$count photo${count == 1 ? '' : 's'}'
+            : 'Taking the ${label.toLowerCase()} shot',
         style: const TextStyle(
             color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
       ),
@@ -699,6 +1174,29 @@ class _Briefing extends StatelessWidget {
                 style: const TextStyle(
                     color: Colors.white, fontSize: 19, height: 1.45),
               ),
+              // A good example of this shot: the owner's own certified photo
+              // once added to assets/reference (v1.1.0), else the placeholder.
+              if (ReferenceShot.of(step.shotType) != null) ...[
+                const SizedBox(height: 18),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ReferenceImage(step.shotType),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Text(
+                        'A good ${step.label.toLowerCase()} shot:\n'
+                        '${ReferenceShot.of(step.shotType)!.line1}\n'
+                        '${ReferenceShot.of(step.shotType)!.line2}',
+                        style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.75),
+                            fontSize: 13.5,
+                            height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 18),
               Container(
                 padding: const EdgeInsets.all(15),

@@ -1,18 +1,1 @@
-# PQF backend dependencies
-opencv-python>=4.9
-opencv-contrib-python>=4.9   # QualityBRISQUE fallback
-scikit-image>=0.22
-pybrisque==1.0               # verified on Python 3.12
-pypiqe==1.2                  # verified on Python 3.12
-numpy>=1.26
-Pillow>=10.0
-scipy>=1.11
-pandas>=2.0
-scikit-learn>=1.4
-matplotlib>=3.8
-fastapi>=0.110
-uvicorn>=0.29
-python-multipart>=0.0.9     # image upload
-google-genai>=0.3           # Gemini Flash semantic evaluator
-python-dotenv>=1.0          # API key from .env
-pytest>=8.0
+-r ../requirements-deploy.txt

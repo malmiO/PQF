@@ -102,4 +102,51 @@ class ApiFailure {
         action: 'Try again.',
         technical: detail,
       );
+
+  /// The saved video plan, or its music, is gone from the server (404 from
+  /// /video/render). Trying again plans the video afresh.
+  static ApiFailure videoPlanExpired(String? detail, {String? serverDetail}) =>
+      ApiFailure(
+        kind: FailureKind.serverError,
+        message: serverDetail ?? 'The video plan has expired.',
+        action: planExpiredAction,
+        technical: detail,
+      );
+
+  static const String planExpiredAction =
+      'Try again to plan and make the video afresh.';
+
+  /// True for [videoPlanExpired]: the plan must be made again before rendering.
+  bool get planExpired => action == planExpiredAction;
+
+  /// Video making is unavailable because the server has no ffmpeg (503).
+  static ApiFailure videoUnavailable(String? detail) => ApiFailure(
+        kind: FailureKind.serverError,
+        message: 'Video making is not available on the server right now.',
+        action: 'Your photos are saved. You can still save and share them.',
+        technical: detail,
+      );
+
+  /// The server tried to make the video but failed (500). Distinct from 503 so
+  /// a genuine assembly error is not hidden behind "not available".
+  /// [serverDetail] is the server's own explanation, shown to the owner.
+  static ApiFailure videoFailed(String? detail, {String? serverDetail}) =>
+      ApiFailure(
+        kind: FailureKind.serverError,
+        message: 'The video could not be made. Try again.',
+        action: serverDetail == null || serverDetail.isEmpty
+            ? 'If it keeps happening, try with fewer images.'
+            : 'The server said: $serverDetail',
+        technical: detail,
+      );
+
+  /// A gateway timeout (502/504) or a client-side timeout while making the
+  /// video, usually a slow tunnel or connection rather than a server fault.
+  static ApiFailure videoTimeout(String? detail) => ApiFailure(
+        kind: FailureKind.timeout,
+        message: 'The connection timed out while making the video. '
+            'Try again on a stronger connection.',
+        action: 'Use Wi-Fi or a stronger signal, then try again.',
+        technical: detail,
+      );
 }

@@ -3,7 +3,11 @@ import '../config/api_config.dart';
 import '../models/api_result.dart';
 import '../services/pqf_api.dart';
 import '../widgets/error_view.dart';
-import 'mode_screen.dart';
+import '../widgets/help_sheet.dart';
+import '../models/study_session.dart';
+import 'onboarding_screen.dart';
+import 'product_form_screen.dart';
+import 'study_screens.dart';
 
 /// Entry point. Kept deliberately short, because every screen before the camera
 /// is a screen between the seller and the thing they came to do.
@@ -15,7 +19,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _controller = TextEditingController();
   final _api = PqfApi();
   bool? _serverUp;
   ApiFailure? _failure;
@@ -39,12 +42,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
@@ -62,10 +59,29 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const SizedBox(height: 24),
-                        const Text('Product Photo Assistant',
-                            style: TextStyle(
-                                fontSize: 27, fontWeight: FontWeight.bold)),
+                        const Align(
+                          alignment: Alignment.topRight,
+                          child: HelpButton(HelpTopic.home),
+                        ),
+                        // A long press opens study mode (PIN protected), so
+                        // participants never come across it (v1.1.0).
+                        GestureDetector(
+                          onLongPress: () async {
+                            await openStudyMode(context);
+                            if (mounted) setState(() {});
+                          },
+                          child: const Text('Product Photo Assistant',
+                              style: TextStyle(
+                                  fontSize: 27, fontWeight: FontWeight.bold)),
+                        ),
+                        if (StudySession.current != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(
+                                'Session ${StudySession.current!.participant}',
+                                style: TextStyle(
+                                    fontSize: 12, color: Colors.grey.shade600)),
+                          ),
                         const SizedBox(height: 10),
                         Text(
                           'Take product photos that are ready to post. '
@@ -76,17 +92,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               height: 1.4),
                         ),
                         const SizedBox(height: 30),
-                        TextField(
-                          controller: _controller,
-                          textCapitalization: TextCapitalization.words,
-                          decoration: InputDecoration(
-                            labelText: 'What are you photographing?',
-                            hintText: 'For example, silver bracelet',
-                            border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
                         _ServerStatus(
                           checking: _checking,
                           up: _serverUp,
@@ -99,17 +104,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           style: FilledButton.styleFrom(
                               minimumSize: const Size.fromHeight(52)),
                           onPressed: _serverUp == true
-                              ? () {
-                                  final name = _controller.text.trim();
-                                  Navigator.of(context).push(MaterialPageRoute(
-                                    builder: (_) => ModeScreen(
-                                      productName:
-                                          name.isEmpty ? 'Product' : name,
+                              ? () => Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => const ProductFormScreen(),
                                     ),
-                                  ));
-                                }
+                                  )
                               : null,
-                          child: const Text('Start photographing'),
+                          child: const Text('New product'),
                         ),
                         const SizedBox(height: 14),
                         Text(
@@ -120,6 +121,15 @@ class _HomeScreenState extends State<HomeScreen> {
                               fontSize: 13,
                               color: Colors.grey.shade600,
                               height: 1.4),
+                        ),
+                        const SizedBox(height: 4),
+                        TextButton.icon(
+                          onPressed: () =>
+                              Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => const OnboardingScreen(),
+                          )),
+                          icon: const Icon(Icons.help_outline, size: 18),
+                          label: const Text('How it works'),
                         ),
                         const SizedBox(height: 8),
                       ],
