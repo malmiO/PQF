@@ -43,7 +43,8 @@ class ApiConfig {
   }
 
   /// Where the API is running. Trailing slashes are stripped so joining paths
-  /// never produces a double slash.
+  /// never produces a double slash. A value with no scheme automatically gets https:// added, because without a scheme Uri.parse
+  /// reads the whole string as a path with an empty host and every request fails.
   static String get baseUrl {
     final v = _get('PQF_API_BASE_URL');
     if (v == null) {
@@ -56,7 +57,8 @@ class ApiConfig {
       );
       return 'http://10.0.2.2:8000';
     }
-    return v.replaceAll(RegExp(r'/+$'), '');
+    final withScheme = v.contains('://') ? v : 'https://$v';
+    return withScheme.replaceAll(RegExp(r'/+$'), '');
   }
 
   /// How often a live guidance frame is sent. Raise if the preview stutters.
