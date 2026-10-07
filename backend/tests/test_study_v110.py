@@ -109,3 +109,22 @@ def test_a_rejected_photo_is_logged(log):
                   framework_selection=[], gate={"certified": False,
                                                 "missing": ["hero_shot"]})
     assert client.post("/study/log", content=json.dumps(entry)).status_code == 200
+
+
+def test_export_skips_smoke_test_entries(tmp_path):
+    src = tmp_path / "log.jsonl"
+    src.write_text(json.dumps({**_base("session_start"), "participant": "P99",
+                               "product": "SMOKE"}), encoding="utf-8")
+    m = _export()
+    assert m.rows_from([json.loads(src.read_text())]) == []
+
+
+def test_log_download_needs_a_configured_token(log, monkeypatch):
+    entry = _base("session_start")
+    client.post("/study/log", content=json.dumps(entry))
+    monkeypatch.delenv("PQF_API_TOKEN", raising=False)
+    assert client.get("/study/log/download").status_code == 403
+    monkeypatch.setenv("PQF_API_TOKEN", "t0k")
+    assert client.get("/study/log/download").status_code == 401        # no header
+    r = client.get("/study/log/download", headers={"X-PQF-Token": "t0k"})
+    assert r.status_code == 200 and json.loads(r.text.splitlines()[0])["participant"] == "P03"

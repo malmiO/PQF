@@ -7,6 +7,8 @@ Run from the REPO ROOT:
     python diagnose.py photo1.jpg photo2.jpg    + full scoring of each photo
     python diagnose.py --url https://YOUR-APP.up.railway.app
                                                 + checks a deployed server
+    python diagnose.py --build-check            exit 1 if BRISQUE or PIQE abstain
+                                                (Railway runs it in every build; no key needed)
 
 Scoring a photo makes ONE real Gemini call per photo.
 """
@@ -109,8 +111,45 @@ def remote(url):
         line(False, f"cannot reach /health: {e}")
 
 
+VERIFY_IMAGE = "research/test_set/PASS_1_expect_accepted__511VodekMvL.jpg"
+BASELINE_TQS = 0.608        # corrected 2026-10-03 baseline, numpy 1.26.4 + real BRISQUE
+
+
+def build_check() -> int:
+    """Score the verification image's technical criteria exactly as the pipeline
+    does (semantic mocked: TQS does not depend on it) and FAIL if any metric
+    abstained. Prints the TQS so every build shows it against the baseline."""
+    os.environ["PQF_SEMANTIC_MOCK"] = "1"
+    import numpy as np
+    from backend.pqf.pipeline import score_image
+    from backend.pqf.technical import metric_status
+    print(f"\nBUILD CHECK  numpy {np.__version__}")
+    if os.path.exists(VERIFY_IMAGE):
+        data, name = open(VERIFY_IMAGE, "rb").read(), VERIFY_IMAGE
+    else:
+        # The verification photo is not in this copy: a synthetic product photo
+        # still proves BRISQUE and PIQE run; only the TQS comparison is skipped.
+        import cv2
+        img = np.full((1350, 1080, 3), 225, np.uint8)
+        cv2.rectangle(img, (380, 350), (700, 1000), (40, 60, 200), -1)
+        cv2.putText(img, "PQF", (430, 700), cv2.FONT_HERSHEY_SIMPLEX, 3, (250, 250, 250), 8)
+        data, name = cv2.imencode(".jpg", img)[1].tobytes(), "synthetic"
+        print(f"  {VERIFY_IMAGE} not found: checking the metrics on a synthetic photo")
+    d = score_image(data, path=name)
+    tech = getattr(d, "technical_scores", {}) or {}
+    for k in ("brisque", "piqe"):
+        print(f"  {k:8s} {tech.get(k, float('nan')):.3f}")
+    ab = metric_status().get("abstaining") or []
+    if name != "synthetic":
+        print(f"  TQS {d.tqs:.3f}   baseline {BASELINE_TQS}   difference {d.tqs - BASELINE_TQS:+.3f}")
+    line(not ab, f"metrics abstaining: {ab or 'none'}")
+    return 1 if ab else 0
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
+    if "--build-check" in args:
+        sys.exit(build_check())
     if "--url" in args:
         i = args.index("--url")
         remote(args[i + 1])

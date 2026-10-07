@@ -7,6 +7,7 @@ import '../widgets/help_sheet.dart';
 import '../models/study_session.dart';
 import 'onboarding_screen.dart';
 import 'product_form_screen.dart';
+import 'business_profile_screen.dart';
 import 'study_screens.dart';
 
 /// Entry point. Kept deliberately short, because every screen before the camera
@@ -123,6 +124,17 @@ class _HomeScreenState extends State<HomeScreen> {
                               height: 1.4),
                         ),
                         const SizedBox(height: 4),
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                              minimumSize: const Size.fromHeight(48)),
+                          onPressed: () =>
+                              Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => const BusinessProfileScreen(),
+                          )),
+                          icon: const Icon(Icons.storefront_outlined, size: 20),
+                          label: const Text('My shop'),
+                        ),
+                        const SizedBox(height: 4),
                         TextButton.icon(
                           onPressed: () =>
                               Navigator.of(context).push(MaterialPageRoute(
@@ -212,7 +224,7 @@ class _ServerStatus extends StatelessWidget {
         Text('Trying to reach  ${ApiConfig.displayTarget}',
             style: TextStyle(
                 fontSize: 11.5,
-                color: Colors.grey.shade600,
+                color: Colors.grey.shade700, // 4.5:1 on the tinted background
                 fontFamily: 'monospace')),
       ],
     );

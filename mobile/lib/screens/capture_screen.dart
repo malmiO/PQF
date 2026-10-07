@@ -102,10 +102,13 @@ class _CaptureScreenState extends State<CaptureScreen>
   // Auto zoom (v1.1.0): follows the server's zoom hint while Auto is on.
   DateTime _lastZoomChange = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastAutoZoom = DateTime.fromMillisecondsSinceEpoch(0);
+
   /// The owner moved the zoom slider during this shot: auto zoom stays out.
   bool _manualZoomThisShot = false;
+
   /// The current zoom was chosen by auto zoom (shown on the slider label).
   bool _zoomIsAuto = false;
+
   /// The highest zoom that keeps enough real detail on this camera
   /// (AutoZoom.capFor); auto zoom stays below it, the label warns above it.
   double _detailZoomCap = AutoZoom.autoCap;
@@ -251,7 +254,7 @@ class _CaptureScreenState extends State<CaptureScreen>
   }
 
   void _onFrame(CameraImage image) {
-    if (!_guided) return;              // UNGUIDED: never ask for guidance
+    if (!_guided) return; // UNGUIDED: never ask for guidance
     if (_checkInFlight || _scoring || _capturing || _showBriefing) return;
     final now = DateTime.now();
     if (now.difference(_lastCheck) < ApiConfig.guidanceInterval) return;
@@ -297,7 +300,8 @@ class _CaptureScreenState extends State<CaptureScreen>
       if (!_loggedFrameDims) {
         _loggedFrameDims = true;
         final landscape = payload.width > payload.height;
-        debugPrint('[guidance] decoded frame ${payload.width}x${payload.height} '
+        debugPrint(
+            '[guidance] decoded frame ${payload.width}x${payload.height} '
             '(${landscape ? "LANDSCAPE / sensor orientation" : "upright"}), '
             'sensorOrientation=$sensorOrientation -> rotation sent');
       }
@@ -340,7 +344,8 @@ class _CaptureScreenState extends State<CaptureScreen>
       // A dropped frame keeps the previous reading rather than blanking the
       // indicators, which would make the interface flicker on a weak network.
       _guidanceFailures++;
-      if (_guidanceFailures >= failuresBeforeWarning && !_warnedAboutConnection) {
+      if (_guidanceFailures >= failuresBeforeWarning &&
+          !_warnedAboutConnection) {
         _warnedAboutConnection = true;
         ErrorView.showSnack(context, result.failure!);
       }
@@ -381,7 +386,9 @@ class _CaptureScreenState extends State<CaptureScreen>
     final target = (_exposureOffset + hint * exposureStepEv)
         .clamp(_minExposure, _maxExposure)
         .toDouble();
-    if ((target - _exposureOffset).abs() < 0.001) return; // already at the limit
+    if ((target - _exposureOffset).abs() < 0.001) {
+      return; // already at the limit
+    }
     _lastExposureStep = now;
     _setExposure(target);
   }
@@ -391,11 +398,17 @@ class _CaptureScreenState extends State<CaptureScreen>
   /// A change restarts the steady-frame count, so a photo is never taken before
   /// focus has settled at the new zoom.
   void _maybeApplyZoomHint(double hint) {
-    if (!_autoCapture || !_zoomSupported || _manualZoomThisShot || _capturing) return;
+    if (!_autoCapture || !_zoomSupported || _manualZoomThisShot || _capturing) {
+      return;
+    }
     final now = DateTime.now();
     if (now.difference(_lastAutoZoom) < AutoZoom.minInterval) return;
-    final next = AutoZoom.next(current: _zoom, hint: hint, min: _minZoom,
-        max: _maxZoom, cap: _detailZoomCap);
+    final next = AutoZoom.next(
+        current: _zoom,
+        hint: hint,
+        min: _minZoom,
+        max: _maxZoom,
+        cap: _detailZoomCap);
     if (next == null) return;
     _lastAutoZoom = now;
     _stableFrames = 0;
@@ -617,14 +630,17 @@ class _CaptureScreenState extends State<CaptureScreen>
 
     final result = await _api.batch(_captured);
     if (!mounted) return;
-    if (result.ok && study != null) StudyLog.batchResult(_captured, result.value!);
+    if (result.ok && study != null) {
+      StudyLog.batchResult(_captured, result.value!);
+    }
 
     if (!result.ok) {
       setState(() => _scoring = false);
       await showDialog<void>(
         context: context,
         builder: (_) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           content: ErrorView(
             failure: result.failure!,
             onDismiss: () => Navigator.of(context).pop(),
@@ -953,7 +969,8 @@ class _ZoomControl extends StatelessWidget {
           const SizedBox(width: 6),
           SizedBox(
             width: 116,
-            child: Text('${auto ? 'Auto zoom' : 'Zoom'} ${zoom.toStringAsFixed(1)}x',
+            child: Text(
+                '${auto ? 'Auto zoom' : 'Zoom'} ${zoom.toStringAsFixed(1)}x',
                 style: TextStyle(
                     color: soft ? Colors.amber.shade300 : Colors.white,
                     fontSize: 12.5,
@@ -1005,35 +1022,67 @@ class _TopBar extends StatelessWidget {
         ),
         // Auto capture is a user choice, not something imposed. Someone
         // photographing a difficult item may want full manual control.
-        if (onToggleAuto != null) GestureDetector(
-          onTap: onToggleAuto,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.55),
-              borderRadius: BorderRadius.circular(16),
+        // 48 dp tap area and a spoken label (accessibility pass, v1.1.0).
+        if (onToggleAuto != null)
+          Semantics(
+            button: true,
+            label: autoCapture
+                ? 'Auto capture on. Tap for manual'
+                : 'Manual capture. Tap for auto',
+            excludeSemantics: true,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onToggleAuto,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 48),
+                child: Center(
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.55),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(
+                          autoCapture
+                              ? Icons.motion_photos_auto
+                              : Icons.touch_app,
+                          color: Colors.white,
+                          size: 16),
+                      const SizedBox(width: 6),
+                      Text(autoCapture ? 'Auto' : 'Manual',
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 12.5)),
+                    ]),
+                  ),
+                ),
+              ),
             ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(autoCapture ? Icons.motion_photos_auto : Icons.touch_app,
-                  color: Colors.white, size: 16),
-              const SizedBox(width: 6),
-              Text(autoCapture ? 'Auto' : 'Manual',
-                  style:
-                      const TextStyle(color: Colors.white, fontSize: 12.5)),
-            ]),
           ),
-        ),
-        const SizedBox(width: 8),
-        GestureDetector(
-          onTap: onHelp,
-          child: Container(
-            padding: const EdgeInsets.all(7),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.55),
-              shape: BoxShape.circle,
+        const SizedBox(width: 4),
+        Semantics(
+          button: true,
+          label: 'Help',
+          excludeSemantics: true,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onHelp,
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.help_outline,
+                      color: Colors.white, size: 18),
+                ),
+              ),
             ),
-            child:
-                const Icon(Icons.help_outline, color: Colors.white, size: 18),
           ),
         ),
       ]),
@@ -1365,44 +1414,49 @@ class _Shutter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onPressed,
-      child: SizedBox(
-        width: 84,
-        height: 84,
-        child: Stack(alignment: Alignment.center, children: [
-          if (autoCapture && progress > 0)
-            SizedBox(
-              width: 84,
-              height: 84,
-              child: CircularProgressIndicator(
-                value: progress,
-                strokeWidth: 5,
-                color: const Color(0xFF2E7D32),
-                backgroundColor: Colors.white24,
+    return Semantics(
+      button: true,
+      label: 'Take photo',
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: onPressed,
+        child: SizedBox(
+          width: 84,
+          height: 84,
+          child: Stack(alignment: Alignment.center, children: [
+            if (autoCapture && progress > 0)
+              SizedBox(
+                width: 84,
+                height: 84,
+                child: CircularProgressIndicator(
+                  value: progress,
+                  strokeWidth: 5,
+                  color: const Color(0xFF2E7D32),
+                  backgroundColor: Colors.white24,
+                ),
+              ),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 74,
+              height: 74,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: ready ? const Color(0xFF2E7D32) : Colors.white70,
+                  width: 4,
+                ),
+              ),
+              child: Center(
+                child: Container(
+                  width: 56,
+                  height: 56,
+                  decoration: const BoxDecoration(
+                      color: Colors.white, shape: BoxShape.circle),
+                ),
               ),
             ),
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: 74,
-            height: 74,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: ready ? const Color(0xFF2E7D32) : Colors.white70,
-                width: 4,
-              ),
-            ),
-            child: Center(
-              child: Container(
-                width: 56,
-                height: 56,
-                decoration: const BoxDecoration(
-                    color: Colors.white, shape: BoxShape.circle),
-              ),
-            ),
-          ),
-        ]),
+          ]),
+        ),
       ),
     );
   }

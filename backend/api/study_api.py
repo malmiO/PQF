@@ -40,11 +40,17 @@ ALLOWED = {"event", "timestamp", "participant", "condition", "product", "session
 
 
 def log_path() -> Path:
-    """research/results/study_log.jsonl, or PQF_STUDY_LOG (tests use a temp file)."""
+    """Where the study log is appended:
+    PQF_STUDY_LOG (a file; tests use a temp file), else PQF_STUDY_DIR/study_log.jsonl
+    (a deployed server points this at a persistent volume, because a container's
+    own disk is wiped on every redeploy), else research/results/study_log.jsonl."""
     import os
     override = os.environ.get("PQF_STUDY_LOG")
     if override:
         return Path(override)
+    folder = os.environ.get("PQF_STUDY_DIR")
+    if folder:
+        return Path(folder) / "study_log.jsonl"
     return Path(__file__).resolve().parents[2] / "research" / "results" / "study_log.jsonl"
 
 
@@ -144,6 +150,22 @@ async def study_log(request: Request):
     with _LOCK, open(p, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, separators=(",", ":")) + "\n")
     return {"ok": True}
+
+
+@router.get("/study/log/download")
+def study_log_download():
+    """The study log as a file, for copying it off a deployed server (v1.1.0).
+    Only when PQF_API_TOKEN is set: the protection middleware has then already
+    checked the token. On a server without a token this is refused."""
+    import os
+    from fastapi.responses import FileResponse
+    if not os.environ.get("PQF_API_TOKEN"):
+        raise HTTPException(403, "Set PQF_API_TOKEN on the server to allow downloads.")
+    p = log_path()
+    if not p.exists():
+        raise HTTPException(404, "No study log yet.")
+    return FileResponse(str(p), media_type="application/x-ndjson",
+                        filename="study_log.jsonl")
 
 
 # --------------------------------------------------------------------------- order

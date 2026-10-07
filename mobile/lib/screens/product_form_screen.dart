@@ -2,6 +2,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 
 import '../services/pqf_api.dart';
+import '../models/business_profile.dart';
 import '../widgets/help_sheet.dart';
 import 'mode_screen.dart';
 
@@ -35,7 +36,19 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   final _features = List.generate(3, (_) => TextEditingController());
 
   final PqfApi _api = PqfApi();
-  final AudioPlayer _audio = AudioPlayer();
+  /// Created on the first preview only, so no player exists unless the owner
+  /// listens (and none to release otherwise).
+  AudioPlayer? _player;
+
+  AudioPlayer get _audio {
+    final existing = _player;
+    if (existing != null) return existing;
+    final p = AudioPlayer();
+    p.onPlayerComplete.listen((_) {
+      if (mounted) setState(() => _playing = false);
+    });
+    return _player = p;
+  }
 
   String? _category;
   String _mood = '';
@@ -52,9 +65,6 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   void initState() {
     super.initState();
     _loadMusic();
-    _audio.onPlayerComplete.listen((_) {
-      if (mounted) setState(() => _playing = false);
-    });
   }
 
   /// GET /music for the category: the recommended mood, the mood descriptions
@@ -99,7 +109,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   }
 
   Future<void> _selectMood(String m) async {
-    if (_playing) await _audio.stop();
+    if (_playing) await _player?.stop();
     if (!mounted) return;
     setState(() {
       _mood = m;
@@ -110,7 +120,9 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
 
   Future<void> _next() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_playing) await _audio.stop();
+    if (_playing) await _player?.stop();
+    // The shop, contact and colour from My shop go into every video (v1.1.0).
+    final profile = await BusinessProfile.load();
     if (!mounted) return;
     setState(() => _playing = false);
     final draft = ProductDraft(
@@ -120,6 +132,9 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       category: _category ?? '',
       mood: _mood,
       format: _format,
+      shop: profile.shop,
+      contact: profile.contact,
+      brandColour: profile.colour,
     );
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => ModeScreen(draft: draft),
@@ -128,7 +143,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
 
   @override
   void dispose() {
-    _audio.dispose();
+    _player?.dispose();
     _name.dispose();
     _price.dispose();
     for (final c in _features) {

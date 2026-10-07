@@ -6,6 +6,12 @@ They contain copies of the test files (including the pre-change versions),
 so without this pytest would collect each test twice and run stale tests.
 Only the live suite under backend/tests should be collected.
 """
+import os
+
+# The suite calls /batch and /video/plan many times from one address; the
+# per-IP limits are tested on their own (test_protection_v110.py).
+os.environ.setdefault("PQF_RATE_LIMIT", "off")
+
 collect_ignore_glob = [
     "backend_backup_2026-10-03/*",
     "mobile/lib_backup_2026-10-03/*",

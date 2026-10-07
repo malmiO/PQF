@@ -28,6 +28,10 @@ class ErrorView extends StatelessWidget {
         return Icons.hourglass_disabled;
       case FailureKind.badImage:
         return Icons.image_not_supported_outlined;
+      case FailureKind.unauthorized:
+        return Icons.lock_outline;
+      case FailureKind.rateLimited:
+        return Icons.hourglass_bottom;
       default:
         return Icons.error_outline;
     }

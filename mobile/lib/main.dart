@@ -3,6 +3,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'config/api_config.dart';
 import 'screens/home_screen.dart';
 import 'screens/onboarding_screen.dart';
+import 'screens/privacy_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,13 +21,17 @@ Future<void> main() async {
   }
   // Show the first-run guide only until it has been seen once.
   final onboardingSeen = await OnboardingScreen.seen();
-  runApp(PqfApp(showOnboarding: !onboardingSeen));
+  // The privacy notice follows the introduction once; people who saw the
+  // introduction before v1.1.0 get the notice on their next launch.
+  final privacySeen = await PrivacyScreen.seen();
+  runApp(PqfApp(showOnboarding: !onboardingSeen, showPrivacy: !privacySeen));
 }
 
 class PqfApp extends StatelessWidget {
   final bool showOnboarding;
+  final bool showPrivacy;
 
-  const PqfApp({super.key, this.showOnboarding = false});
+  const PqfApp({super.key, this.showOnboarding = false, this.showPrivacy = false});
 
   @override
   Widget build(BuildContext context) {
@@ -53,10 +58,15 @@ class PqfApp extends StatelessWidget {
           ),
         ),
       ),
-      routes: {'/home': (_) => const HomeScreen()},
+      routes: {
+        '/home': (_) => const HomeScreen(),
+        '/privacy': (_) => const PrivacyScreen(firstRun: true),
+      },
       home: showOnboarding
           ? const OnboardingScreen(firstRun: true)
-          : const HomeScreen(),
+          : showPrivacy
+              ? const PrivacyScreen(firstRun: true)
+              : const HomeScreen(),
     );
   }
 }

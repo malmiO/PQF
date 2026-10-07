@@ -49,6 +49,8 @@ def _secs(a, b):
 def rows_from(lines: list) -> list:
     sessions = {}
     for e in lines:
+        if str(e.get("product", "")).upper().startswith("SMOKE"):
+            continue                       # deployment checks, not participants
         key = (e["participant"], e["condition"])
         sessions.setdefault(key, []).append(e)
     out = []

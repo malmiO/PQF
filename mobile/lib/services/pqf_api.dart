@@ -88,9 +88,32 @@ class GuidanceResult {
         zoomHint: (j['zoom_hint'] as num?)?.toDouble() ?? 1.0,
       );
 
+  /// The order fixes are asked for (v1.1.0): framing first (where the product
+  /// sits and how big it is), then focus, light and background.
+  static const instructionOrder = ['framing', 'sharpness', 'exposure', 'background'];
+
   /// The single instruction to show. Showing every failing criterion at once
-  /// overwhelms a non expert, so only the first is surfaced.
-  String? get primaryInstruction => feedback.isEmpty ? null : feedback.first;
+  /// overwhelms a non expert, so only the most important one is surfaced.
+  /// The server lists one feedback line per failing check, in the order of
+  /// [checks]; this picks the line of the highest priority failing check.
+  String? get primaryInstruction {
+    if (feedback.isEmpty) return null;
+    final failing = [for (final c in checks) if (c.passed == false) c.name];
+    if (failing.length != feedback.length) return feedback.first;
+    for (final name in instructionOrder) {
+      final i = failing.indexOf(name);
+      if (i >= 0) return feedback[i];
+    }
+    return feedback.first;
+  }
+
+  /// Whether the framing check passed (null before the first reading).
+  bool? get framingOk {
+    for (final c in checks) {
+      if (c.name == 'framing') return c.passed;
+    }
+    return null;
+  }
 
   static GuidanceResult empty() => GuidanceResult(
         ready: false,
@@ -450,6 +473,13 @@ class PqfApi {
   /// telling the user to wait until tomorrow is more useful than "try again".
   ApiFailure _fromResponse(int status, String body) {
     final lower = body.toLowerCase();
+    // Our own server's checks (v1.1.0): wrong access token, per-IP limit.
+    if (status == 401 || lower.contains('bad_token')) {
+      return ApiFailure.unauthorized(body);
+    }
+    if (status == 429 && lower.contains('rate_limited')) {
+      return ApiFailure.rateLimited(body, serverDetail: _serverDetail(body));
+    }
     if (status == 429 || lower.contains('resource_exhausted') ||
         lower.contains('quota')) {
       return ApiFailure.quota(body);
@@ -475,6 +505,7 @@ class PqfApi {
         'POST',
         Uri.parse('${ApiConfig.baseUrl}/guidance'),
       )
+        ..headers.addAll(ApiConfig.authHeaders)
         // Per shot framing, and the rotation the server applies to upright a
         // sensor orientation frame before it checks the scored 4:5 region.
         ..fields['shot'] = shot
@@ -509,7 +540,7 @@ class PqfApi {
       final req = http.MultipartRequest(
         'POST',
         Uri.parse('${ApiConfig.baseUrl}/batch'),
-      );
+      )..headers.addAll(ApiConfig.authHeaders);
       for (var i = 0; i < images.length; i++) {
         req.files.add(http.MultipartFile.fromBytes(
           'files',
@@ -531,8 +562,12 @@ class PqfApi {
   }
 
   /// The URL that streams a track's audio preview, for the audio player.
-  String musicPreviewUrl(String trackId) =>
-      '${ApiConfig.baseUrl}/music/preview/$trackId';
+  /// The audio player cannot send headers, so the token goes in the query.
+  String musicPreviewUrl(String trackId) {
+    final t = ApiConfig.apiToken;
+    final q = t == null ? '' : '?token=${Uri.encodeQueryComponent(t)}';
+    return '${ApiConfig.baseUrl}/music/preview/$trackId$q';
+  }
 
   /// Recommends a music mood and lists the installed tracks for a category.
   Future<ApiResult<MusicRecommendation>> music(String? category) async {
@@ -542,7 +577,9 @@ class PqfApi {
             ? {'category': category}
             : null,
       );
-      final r = await _client.get(uri).timeout(const Duration(seconds: 15));
+      final r = await _client
+          .get(uri, headers: ApiConfig.authHeaders)
+          .timeout(const Duration(seconds: 15));
       if (r.statusCode != 200) {
         return ApiResult.failure(_fromResponse(r.statusCode, r.body));
       }
@@ -612,7 +649,9 @@ class PqfApi {
       final req = http.MultipartRequest(
         'POST',
         Uri.parse('${ApiConfig.baseUrl}/video/plan'),
-      )..fields.addAll({
+      )
+        ..headers.addAll(ApiConfig.authHeaders)
+        ..fields.addAll({
           'roles': roles.join(','),
           'product_name': draft.name,
           'price': draft.price,
@@ -622,6 +661,7 @@ class PqfApi {
           'format': draft.format,
           'shop': draft.shop,
           'contact': draft.contact,
+          'brand_colour': draft.brandColour,
         });
       for (var i = 0; i < images.length; i++) {
         req.files.add(http.MultipartFile.fromBytes(
@@ -651,7 +691,8 @@ class PqfApi {
   Future<ApiResult<VideoPlan>> getVideoPlan(String planId) async {
     try {
       final r = await _client
-          .get(Uri.parse('${ApiConfig.baseUrl}/video/plan/$planId'))
+          .get(Uri.parse('${ApiConfig.baseUrl}/video/plan/$planId'),
+              headers: ApiConfig.authHeaders)
           .timeout(const Duration(seconds: 20));
       if (r.statusCode != 200) {
         return ApiResult.failure(
@@ -670,7 +711,9 @@ class PqfApi {
       final req = http.MultipartRequest(
         'POST',
         Uri.parse('${ApiConfig.baseUrl}/video/render'),
-      )..fields['plan_id'] = planId;
+      )
+        ..headers.addAll(ApiConfig.authHeaders)
+        ..fields['plan_id'] = planId;
       final streamed = await req.send().timeout(ApiConfig.videoTimeout);
       final bytes =
           await streamed.stream.toBytes().timeout(ApiConfig.videoTimeout);
@@ -699,6 +742,15 @@ class PqfApi {
           .timeout(const Duration(seconds: 6));
       if (r.statusCode != 200) {
         return ApiResult.failure(_fromResponse(r.statusCode, r.body));
+      }
+      // /health is open; this protected call shows a wrong token at once,
+      // before the owner starts (v1.1.0).
+      final a = await _client
+          .get(Uri.parse('${ApiConfig.baseUrl}/auth/check'),
+              headers: ApiConfig.authHeaders)
+          .timeout(const Duration(seconds: 6));
+      if (a.statusCode != 200 && a.statusCode != 404) {
+        return ApiResult.failure(_fromResponse(a.statusCode, a.body));
       }
       return const ApiResult.success(true);
     } catch (e) {

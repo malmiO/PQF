@@ -167,11 +167,18 @@ def checklist(plan: dict, record: dict, measured: dict) -> list:
                      f"Largest colour change on the product from brightness matching: "
                      f"{de:.2f} ΔE00 (at most {MAX_PRODUCT_DE00:.1f})."))
 
-    shop = product.get("shop", "")
-    out.append(_item("Brand early and at the end", bool(shop), "shop name" if shop else
-                     "no shop name", "shop name on the first shot and the end card",
-                     "Shop name on the first shot and the end card." if shop
-                     else "Add your shop name in the business profile."))
+    # Measured from what was drawn (v1.1.0): the shop name must be on screen in
+    # the first shot (the kicker above the product name) and on the end card.
+    first = bool(hook and (hook.get("brand") or {}).get("kicker") and hook.get("text_rows"))
+    end_s = next((s for s in timeline if s["kind"] == "end"), None)
+    last = bool(end_s and (end_s.get("brand") or {}).get("shop") and end_s.get("text_rows"))
+    where = [w for w, ok in (("first shot", first), ("end card", last)) if ok]
+    out.append(_item("Brand early and at the end", first and last,
+                     ", ".join(where) or "not shown",
+                     "shop name on the first shot and the end card",
+                     "Shop name shown on the first shot and the end card." if first and last
+                     else "Add your shop name in My shop." if not product.get("shop")
+                     else "Shop name shown on: " + (", ".join(where) or "neither") + "."))
 
     feats = declared.get("Key features shown", {})
     n_feat = len(product.get("features", []))

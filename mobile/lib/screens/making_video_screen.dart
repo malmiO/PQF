@@ -176,15 +176,17 @@ class _StepRow extends StatelessWidget {
       child: Row(children: [
         SizedBox(width: 24, child: Center(child: lead)),
         const SizedBox(width: 14),
-        Text(label,
+        Expanded(
+          child: Text(label,
             style: TextStyle(
                 fontSize: 16,
                 fontWeight: state == _RowState.active
                     ? FontWeight.w600
                     : FontWeight.normal,
                 color: state == _RowState.waiting
-                    ? Colors.grey.shade500
+                    ? Colors.grey.shade700
                     : Colors.black87)),
+        ),
       ]),
     );
   }

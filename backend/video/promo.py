@@ -21,6 +21,7 @@ Text is English only; Sinhala needs complex script shaping and is future work.
 from __future__ import annotations
 
 import math
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,26 +109,51 @@ def _plate(img: np.ndarray, out_w: int, out_h: int, fill_h: float, centre_y: flo
     left = cx - crop_w / 2
     pad = int(max(crop_w, crop_h)) + 4
     h0, w0 = img.shape[:2]
-    ext = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
+    # The crop window in the photo padded by `pad` on every side, and its scale
+    # to the plate.
+    x0, y0 = int(round(left + pad)), int(round(top + pad))
+    ch, cw = int(round(crop_h)), int(round(crop_w))
+    W, H = int(out_w * oversample), int(out_h * oversample)
+    sx, sy = W / cw, H / ch
+
+    # Memory (v1.1.0): the padded photo is never built at full size. Before, the
+    # full size padded copy, a float copy of it and an enlarged blur were made
+    # (several hundred MB for a small product on the end card); only the crop
+    # window was then used. Now the edge extension is blurred at 1/k scale, as
+    # before, and only its crop window is enlarged, straight to the plate; the
+    # photo is scaled once to the plate and feathered in there.
     k = 8
-    small = cv2.resize(ext, (ext.shape[1] // k, ext.shape[0] // k), interpolation=cv2.INTER_AREA)
+    pk = pad // k
+    small = cv2.resize(img, (max(1, w0 // k), max(1, h0 // k)), interpolation=cv2.INTER_AREA)
+    small = cv2.copyMakeBorder(small, pk, pk, pk, pk, cv2.BORDER_REPLICATE)
     small = cv2.GaussianBlur(small, (0, 0), sigmaX=max(3, min(small.shape[:2]) / 25))
-    big = cv2.resize(small, (ext.shape[1], ext.shape[0]), interpolation=cv2.INTER_LINEAR).astype(np.float32)
+    # small pixel (xs, ys) is photo pixel (k (xs - pk), k (ys - pk))
+    to_bg = np.float32([[sx * k, 0, sx * (pad - x0 - k * pk)],
+                        [0, sy * k, sy * (pad - y0 - k * pk)]])
+    plate = cv2.warpAffine(small, to_bg, (W, H), flags=cv2.INTER_LINEAR,
+                           borderMode=cv2.BORDER_REPLICATE).astype(np.float32)
+
     feather = max(8, int(min(h0, w0) * 0.08))
     a = np.ones((h0, w0), np.float32)
     ramp = np.linspace(0.0, 1.0, feather, dtype=np.float32)
     a[:feather] *= ramp[:, None]; a[-feather:] *= ramp[::-1][:, None]
     a[:, :feather] *= ramp[None, :]; a[:, -feather:] *= ramp[::-1][None, :]
-    region = big[pad:pad + h0, pad:pad + w0]
-    region[:] = img.astype(np.float32) * a[..., None] + region * (1 - a[..., None])
-    big = big.astype(np.uint8)
-    x0, y0 = int(round(left + pad)), int(round(top + pad))
-    ch, cw = int(round(crop_h)), int(round(crop_w))
-    crop = big[y0:y0 + ch, x0:x0 + cw]
-    W, H = int(out_w * oversample), int(out_h * oversample)
-    interp = cv2.INTER_AREA if crop.shape[0] > H else cv2.INTER_LANCZOS4
-    plate = cv2.resize(crop, (W, H), interpolation=interp)
-    sx, sy = W / cw, H / ch
+    if sx < 1:            # shrinking: area resample first, as the crop resize did
+        src = cv2.resize(img, (max(1, round(w0 * sx)), max(1, round(h0 * sy))),
+                         interpolation=cv2.INTER_AREA)
+        a = cv2.resize(a, (src.shape[1], src.shape[0]), interpolation=cv2.INTER_AREA)
+        # src is already at plate scale: only the offset is left
+        to_ph = np.float32([[1, 0, sx * (pad - x0)], [0, 1, sy * (pad - y0)]])
+        interp = cv2.INTER_LINEAR
+    else:                 # enlarging: Lanczos, as the crop resize did
+        src = img
+        to_ph = np.float32([[sx, 0, sx * (pad - x0)], [0, sy, sy * (pad - y0)]])
+        interp = cv2.INTER_LANCZOS4
+    photo = cv2.warpAffine(src, to_ph, (W, H), flags=interp, borderMode=cv2.BORDER_CONSTANT)
+    alpha = cv2.warpAffine(a, to_ph, (W, H), flags=cv2.INTER_LINEAR,
+                           borderMode=cv2.BORDER_CONSTANT)[..., None]
+    plate = photo.astype(np.float32) * alpha + plate * (1 - alpha)
+    plate = np.clip(plate, 0, 255).astype(np.uint8)
     to_plate = lambda x, y: ((x + pad - x0) * sx, (y + pad - y0) * sy)
     return plate, to_plate
 
@@ -521,7 +547,9 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
         seg = dict(kind=kind, plate=plate, layer=_text_layer(shot, fmt, (W, H), brand),
                    dur=float(shot["seconds"]), motion=MOTION[kind], direction=direction,
                    anchor_y=centre_y, image=idx, zone=(centre_y, fill_h),
-                   caption=shot.get("caption", ""))
+                   caption=shot.get("caption", ""),
+                   brand={"kicker": shot.get("kicker", ""), "shop": shot.get("shop", ""),
+                          "contact": shot.get("contact", "")})
         if g is not None:
             seg["pp"], seg["items"] = g["pp"], g["items"]
         segs.append(seg)
@@ -550,7 +578,8 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
     record["timeline"] = [
         {"kind": s["kind"], "image": s["image"], "start": round(starts[i], 3),
          "end": round(starts[i] + s["dur"], 3), "zone": list(s["zone"]),
-         "caption": s["caption"], "text_rows": _text_rows(s["layer"]),
+         "caption": s["caption"], "brand": s["brand"],
+         "text_rows": _text_rows(s["layer"]),
          "text_visible_at": round(starts[i] + 0.5, 3) if s["layer"] is not None else None}
         for i, s in enumerate(segs)]
     record["size"] = [W, H]
@@ -566,8 +595,13 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
         cmd += ["-map", "1:a", "-af",
                 f"afade=t=in:st=0:d=0.6,afade=t=out:st={fade_out:.2f}:d=1.2",
                 "-c:a", "aac", "-b:a", "160k"]
+    # x264 starts about 1.5 frame threads per CPU core, each holding 1080x1920
+    # frames: 541 MB on a 12 core laptop (v1.1.0 measurement). A fixed, small
+    # thread count keeps memory predictable on a small server.
+    threads = os.environ.get("PQF_FFMPEG_THREADS", "2")
     cmd += ["-t", f"{total:.3f}", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(out_path)]
+            "-preset", "veryfast", "-crf", "20", "-threads", threads,
+            "-movflags", "+faststart", str(out_path)]
 
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     err = ""

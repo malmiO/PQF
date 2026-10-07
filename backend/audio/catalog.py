@@ -60,17 +60,19 @@ def audio_seconds(path: Path, ffprobe: str | None = None) -> float | None:
         return None
 
 
-def validate(rows: list, base: Path, duration_of=None, check_normalised: bool = True) -> list:
+def validate(rows: list, base: Path, duration_of=None, check_normalised: bool = True,
+             files_dir: str = FILES_DIR) -> list:
     """Problems, as (track_id, message). Empty means the library is ready.
-    `duration_of(path)` is injectable for tests."""
+    `duration_of(path)` is injectable for tests. For a server that holds only the
+    normalised copies: pass files_dir=NORMALISED_DIR, check_normalised=False."""
     duration_of = duration_of or audio_seconds
     problems = []
     for r in rows:
         tid = r.get("track_id") or "(no id)"
         lic = r.get("licence", "")
-        f = base / FILES_DIR / r.get("file", "")
+        f = base / files_dir / r.get("file", "")
         if not r.get("file") or not f.exists():
-            problems.append((tid, f"file missing: {FILES_DIR}/{r.get('file', '')}"))
+            problems.append((tid, f"file missing: {files_dir}/{r.get('file', '')}"))
         if lic == TEST_LICENCE:
             problems.append((tid, "test tone, not music: remove before the evaluation"))
         elif lic not in ALLOWED_LICENCES:

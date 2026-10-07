@@ -265,18 +265,33 @@ class _Thumb extends StatelessWidget {
           borderRadius: BorderRadius.circular(10),
           child: Image.memory(bytes, fit: BoxFit.cover),
         ),
+        // 48 dp tap area around the small cross, with a spoken label (v1.1.0).
         Positioned(
-          top: 3,
-          right: 3,
-          child: GestureDetector(
-            onTap: onRemove,
-            child: Container(
-              padding: const EdgeInsets.all(3),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.6),
-                shape: BoxShape.circle,
+          top: 0,
+          right: 0,
+          child: Semantics(
+            button: true,
+            label: 'Remove this photo',
+            excludeSemantics: true,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onRemove,
+              child: SizedBox(
+                width: 48,
+                height: 48,
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: Container(
+                    margin: const EdgeInsets.all(3),
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.6),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.close, size: 15, color: Colors.white),
+                  ),
+                ),
               ),
-              child: const Icon(Icons.close, size: 15, color: Colors.white),
             ),
           ),
         ),

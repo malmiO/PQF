@@ -30,6 +30,12 @@ enum FailureKind {
   /// The image could not be read or was rejected.
   badImage,
 
+  /// The server refused the app's access token (v1.1.0).
+  unauthorized,
+
+  /// Too many requests from this network in the last hour (v1.1.0).
+  rateLimited,
+
   /// Anything not otherwise classified.
   unknown,
 }
@@ -87,6 +93,21 @@ class ApiFailure {
         message: 'The photo checking service reported a problem.',
         action: 'Try again. If it keeps happening, restart the server.',
         technical: 'HTTP $status. $detail',
+      );
+
+  static ApiFailure unauthorized(String? detail) => ApiFailure(
+        kind: FailureKind.unauthorized,
+        message: 'This app is not allowed to use the photo checking service.',
+        action: 'The access token in the app settings (PQF_API_TOKEN in '
+            'config.env) does not match the server. Ask the person who set it up.',
+        technical: detail,
+      );
+
+  static ApiFailure rateLimited(String? detail, {String? serverDetail}) => ApiFailure(
+        kind: FailureKind.rateLimited,
+        message: 'Too many checks from this network for now.',
+        action: serverDetail ?? 'Try again in a while. Your photos are safe.',
+        technical: detail,
       );
 
   static ApiFailure badImage(String? detail) => ApiFailure(

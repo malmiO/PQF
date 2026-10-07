@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'privacy_screen.dart';
 
 /// First-run guide: three short screens that set expectations before the camera.
 ///
@@ -67,8 +68,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     await OnboardingScreen.markSeen();
     if (!mounted) return;
     if (widget.firstRun) {
-      // Replace with the home screen so Back does not return to the guide.
-      Navigator.of(context).pushReplacementNamed('/home');
+      // Replace with the privacy notice (once) or the home screen, so Back
+      // does not return to the guide.
+      final privacySeen = await PrivacyScreen.seen();
+      if (!mounted) return;
+      Navigator.of(context).pushReplacementNamed(privacySeen ? '/home' : '/privacy');
     } else {
       Navigator.of(context).pop();
     }

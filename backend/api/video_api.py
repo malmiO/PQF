@@ -31,6 +31,8 @@ SESSIONS = Path(tempfile.gettempdir()) / "pqf_video_sessions"
 KEEP_HOURS = 3
 MAX_IMAGES = 6
 _ID = re.compile(r"^[0-9a-f]{32}$")
+HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
+DEFAULT_BRAND = "#1F3A63"
 
 
 def _base() -> Path:
@@ -121,6 +123,7 @@ def video_plan(
     format: str = Form("vertical"),
     shop: str = Form(""),                 # from the business profile, when it exists
     contact: str = Form(""),
+    brand_colour: str = Form(""),         # business profile colour, "#RRGGBB" (v1.1.0)
 ):
     """Plan the video from the CERTIFIED set and the owner's product form."""
     from .main import _platform_format, _read_upload
@@ -161,6 +164,7 @@ def video_plan(
 
     plan = build_plan(images, info, format, located, _music(info.mood, info.category))
     plan["callout_guard"] = guard
+    plan["brand_colour"] = brand_colour if HEX.match(brand_colour or "") else DEFAULT_BRAND
     plan["plan_id"] = plan_id
     (d / "plan.json").write_text(json.dumps(plan, indent=1), encoding="utf-8")
     return plan
@@ -172,7 +176,7 @@ def get_plan(plan_id: str):
 
 
 @router.post("/video/render")
-def video_render(plan_id: str = Form(...), brand_colour: str = Form("#1F3A63")):
+def video_render(plan_id: str = Form(...), brand_colour: str = Form("")):
     """Render the MP4 from a saved plan. No input from the owner is needed."""
     from ..video import audio as A
     from ..video.promo import render_plan
@@ -195,7 +199,8 @@ def video_render(plan_id: str = Form(...), brand_colour: str = Form("#1F3A63")):
     out = d / "promo_video.mp4"
     try:
         r = render_plan(plan, paths, out, audio_path=audio_path,
-                        brand_colour=brand_colour, ffmpeg_bin=ff)
+                        brand_colour=brand_colour if HEX.match(brand_colour or "")
+                        else plan.get("brand_colour", DEFAULT_BRAND), ffmpeg_bin=ff)
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     # Step 4 (v1.1.0): the checklist is MEASURED from the finished file and saved

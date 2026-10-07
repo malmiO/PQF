@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../screens/onboarding_screen.dart';
+import '../screens/privacy_screen.dart';
 
 /// The screen a help sheet is for. Every screen has a "?" that opens its own
 /// short help, in the same plain language as the shot briefings.
 enum HelpTopic {
   home,
+  profile,
   productForm,
   mode,
   upload,
@@ -117,18 +119,18 @@ class _HelpSheet extends StatelessWidget {
 
   static const _lights = <_Item>[
     _Item(Icons.center_focus_strong, 'Focus',
-        'How sharp the product looks. Amber: hold the phone steady and tap the '
+        'How sharp the product looks. To fix: hold the phone steady and tap the '
             'product on screen to focus.'),
     _Item(Icons.wb_sunny_outlined, 'Light',
-        'How bright the product is. Amber: raise the brightness with the '
+        'How bright the product is. To fix: raise the brightness with the '
             'slider, or move to better light. White streaks on a shiny product '
             'are glare: put a thin white cloth or paper between the lamp and '
             'the product.'),
     _Item(Icons.wallpaper_outlined, 'Background',
-        'How clean and plain the background is. Amber: use a plain white or '
+        'How clean and plain the background is. To fix: use a plain white or '
             'light surface. On a grey light box, raise the brightness.'),
     _Item(Icons.crop_free, 'Framing',
-        'Whether the product fills the frame well. Amber: move closer or '
+        'Whether the product fills the box well. To fix: move closer or '
             'further so the product sits inside the box. A little zoom helps; '
             'if the zoom number turns amber the photo will be soft, so move '
             'the phone closer instead.'),
@@ -144,6 +146,17 @@ class _HelpSheet extends StatelessWidget {
           _Item(Icons.wifi, 'Connected',
               'The app needs the photo checking service. If it cannot reach it, '
                   'check the Wi-Fi and try again.'),
+        ]);
+      case HelpTopic.profile:
+        return ('My shop', 'Entered once, used in every video.', const [
+          _Item(Icons.storefront_outlined, 'Shop name',
+              'Shown at the start of the video and on the end card.'),
+          _Item(Icons.chat_outlined, 'Contact',
+              'Added to "Message us to order" at the end, and to the caption.'),
+          _Item(Icons.palette_outlined, 'Brand colour',
+              'The colour of the text labels in your videos.'),
+          _Item(Icons.lock_outline, 'Kept on your phone',
+              'Your shop details are saved only on this phone.'),
         ]);
       case HelpTopic.productForm:
         return ('Product details', 'You only fill this in once per product.', const [
@@ -172,8 +185,10 @@ class _HelpSheet extends StatelessWidget {
               'Two photos of the same view are fine, but only one is used.'),
         ]);
       case HelpTopic.capture:
-        return ('What the lights mean',
-            'Green means that check passed. Amber means something to fix first.',
+        return ('Reading the camera screen',
+            'The box shows where the product goes; it turns green when the '
+                'product is placed well. The line under the frame says the one '
+                'thing to fix first, and turns green when the shot is ready.',
             _lights);
       case HelpTopic.results:
         return ('Your results', 'We keep the best four: main, two angles, detail.', const [
@@ -289,6 +304,15 @@ class _HelpSheet extends StatelessWidget {
               },
               icon: const Icon(Icons.slideshow_outlined, size: 18),
               label: const Text('Show the introduction again'),
+            ),
+            TextButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const PrivacyScreen()));
+              },
+              icon: const Icon(Icons.privacy_tip_outlined, size: 18),
+              label: const Text('Your privacy'),
             ),
           ],
         ),

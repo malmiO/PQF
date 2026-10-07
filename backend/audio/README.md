@@ -32,7 +32,7 @@ code only checks that what was recorded is complete and allowed.
    python scripts/check_tracks.py
    ```
 
-   `check_tracks.py` must print **READY**. The Docker build runs it too.
+   `check_tracks.py` must print **READY**. The Railway build runs it too.
 
 ## Before the evaluation
 

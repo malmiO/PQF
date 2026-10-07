@@ -36,7 +36,6 @@ mobile/windows/
 mobile/assets/config.env
 mobile/assets/
 
-
 # OS / editor
 .DS_Store
 .idea/

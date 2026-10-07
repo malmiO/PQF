@@ -67,6 +67,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Access token (when PQF_API_TOKEN is set) and per-IP rate limits (v1.1.0).
+from .protection import protect as _protect, router as _auth_router  # noqa: E402
+app.middleware("http")(_protect)
+app.include_router(_auth_router)
+
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 
 # Live guidance parameters. Guidance trades precision for speed, because it runs

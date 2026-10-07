@@ -205,7 +205,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
                         height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2)),
                     SizedBox(width: 10),
-                    Text('Making your video next'),
+                    Flexible(child: Text('Making your video next')),
                   ],
                 )
               else
@@ -275,9 +275,11 @@ class _Verdict extends StatelessWidget {
             Icon(ok ? Icons.verified : Icons.info_outline,
                 color: ok ? const Color(0xFF2E7D32) : const Color(0xFFB8860B)),
             const SizedBox(width: 10),
-            Text(
-              ok ? 'Your set is ready' : 'Almost there',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            Flexible(
+              child: Text(
+                ok ? 'Your set is ready' : 'Almost there',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
             ),
           ]),
           const SizedBox(height: 10),
@@ -368,10 +370,11 @@ class _SetCard extends StatelessWidget {
                   const Icon(Icons.check_circle,
                       size: 16, color: Color(0xFF2E7D32)),
                   const SizedBox(width: 6),
-                  Text(_roleLabel(photo.role),
-                      style: const TextStyle(
-                          fontSize: 15.5, fontWeight: FontWeight.w600)),
-                  const Spacer(),
+                  Expanded(
+                    child: Text(_roleLabel(photo.role),
+                        style: const TextStyle(
+                            fontSize: 15.5, fontWeight: FontWeight.w600)),
+                  ),
                   Text('Photo ${photo.index + 1}',
                       style: TextStyle(
                           fontSize: 11.5, color: Colors.grey.shade600)),
@@ -384,7 +387,7 @@ class _SetCard extends StatelessWidget {
                 Text('overall ${(photo.fqs * 100).round()}',
                     style: TextStyle(
                         fontSize: 10.5,
-                        color: Colors.grey.shade500,
+                        color: Colors.grey.shade700, // 4.5:1 contrast (v1.1.0)
                         fontFamily: 'monospace')),
               ],
             ),
@@ -433,10 +436,11 @@ class _NotUsedCard extends StatelessWidget {
                 Row(children: [
                   Icon(icon, size: 16, color: colour),
                   const SizedBox(width: 6),
-                  Text(label,
-                      style: const TextStyle(
-                          fontSize: 14.5, fontWeight: FontWeight.w600)),
-                  const Spacer(),
+                  Expanded(
+                    child: Text(label,
+                        style: const TextStyle(
+                            fontSize: 14.5, fontWeight: FontWeight.w600)),
+                  ),
                   Text('Photo ${photo.index + 1}',
                       style: TextStyle(
                           fontSize: 11.5, color: Colors.grey.shade600)),

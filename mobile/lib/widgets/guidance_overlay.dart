@@ -15,9 +15,13 @@ import '../services/pqf_api.dart';
 /// at once produces a wall of correction that a beginner cannot act on. The
 /// most important failing check is surfaced and the rest wait their turn.
 ///
-/// Three, status is never carried by colour alone. Each indicator also carries
-/// an icon and a label, so the interface still works for a colour blind user
+/// Three, status is never carried by colour alone. The banner carries an icon
+/// and words as well as its colour, so it still works for a colour blind user
 /// and in bright outdoor light where colour is hard to judge.
+///
+/// v1.1.0: the four indicator lights were removed. They repeated what the one
+/// instruction already says and competed with it for attention; the banner now
+/// carries the status (green tick: ready, amber bulb: one thing to fix).
 class GuidanceOverlay extends StatelessWidget {
   final GuidanceResult guidance;
   final bool waitingForServer;
@@ -30,86 +34,13 @@ class GuidanceOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _IndicatorRow(checks: guidance.checks, waiting: waitingForServer),
-        const SizedBox(height: 14),
-        _InstructionBanner(
-          instruction: guidance.primaryInstruction,
-          ready: guidance.ready,
-          waiting: waitingForServer,
-          hasData: guidance.checks.isNotEmpty,
-        ),
-      ],
-    );
-  }
-}
-
-class _IndicatorRow extends StatelessWidget {
-  final List<CriterionResult> checks;
-  final bool waiting;
-
-  const _IndicatorRow({required this.checks, required this.waiting});
-
-  @override
-  Widget build(BuildContext context) {
-    if (checks.isEmpty) {
-      return const SizedBox(height: 62);
-    }
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: checks
-          .map((c) => Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 7),
-                child: _Indicator(check: c, dimmed: waiting),
-              ))
-          .toList(),
-    );
-  }
-}
-
-class _Indicator extends StatelessWidget {
-  final CriterionResult check;
-  final bool dimmed;
-
-  const _Indicator({required this.check, required this.dimmed});
-
-  @override
-  Widget build(BuildContext context) {
-    final ok = check.passed ?? false;
-    final color = ok ? const Color(0xFF2E7D32) : const Color(0xFFC62828);
-    final icon = ok ? Icons.check_circle : Icons.error;
-
-    return AnimatedOpacity(
-      opacity: dimmed ? 0.55 : 1.0,
-      duration: const Duration(milliseconds: 180),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              boxShadow: const [
-                BoxShadow(color: Colors.black38, blurRadius: 6, offset: Offset(0, 2)),
-              ],
-            ),
-            child: Icon(icon, color: Colors.white, size: 19),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            check.label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-              shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
-            ),
-          ),
-        ],
+    return Semantics(
+      liveRegion: true,
+      child: _InstructionBanner(
+        instruction: guidance.primaryInstruction,
+        ready: guidance.ready,
+        waiting: waitingForServer,
+        hasData: guidance.checks.isNotEmpty,
       ),
     );
   }
@@ -136,15 +67,15 @@ class _InstructionBanner extends StatelessWidget {
 
     if (!hasData) {
       text = waiting ? 'Checking the shot' : 'Point the camera at your product';
-      background = Colors.black.withOpacity(0.62);
+      background = Colors.black.withValues(alpha: 0.62);
       icon = Icons.camera_alt_outlined;
     } else if (ready) {
       text = 'Looks good. Take the photo';
-      background = const Color(0xFF2E7D32).withOpacity(0.92);
+      background = const Color(0xFF2E7D32).withValues(alpha: 0.92);
       icon = Icons.check_circle_outline;
     } else {
       text = instruction ?? 'Adjust the shot';
-      background = const Color(0xFFB8860B).withOpacity(0.92);
+      background = const Color(0xFFB8860B).withValues(alpha: 0.92);
       icon = Icons.lightbulb_outline;
     }
 
@@ -179,8 +110,8 @@ class _InstructionBanner extends StatelessWidget {
   }
 }
 
-/// The framing status, carried by colour AND an icon and a word (never colour
-/// alone), so it still reads for a colour blind user and in bright light.
+/// The overall status, shown as the colour of the frame's border. Never the
+/// only carrier of status: the instruction banner says it in words.
 enum _FramingStatus { checking, good, adjust }
 
 extension _FramingStatusInfo on _FramingStatus {
@@ -194,27 +125,44 @@ extension _FramingStatusInfo on _FramingStatus {
         return Colors.white;
     }
   }
+}
 
-  IconData get icon {
-    switch (this) {
-      case _FramingStatus.good:
-        return Icons.check_circle;
-      case _FramingStatus.adjust:
-        return Icons.error_outline;
-      case _FramingStatus.checking:
-        return Icons.hourglass_top;
-    }
-  }
+/// The per shot guide drawn inside the scored 4:5 frame (v1.1.0).
+enum GuideKind {
+  /// Main shot: a centred box, the product inside it.
+  box,
 
-  String get word {
-    switch (this) {
-      case _FramingStatus.good:
-        return 'Good';
-      case _FramingStatus.adjust:
-        return 'Adjust';
-      case _FramingStatus.checking:
-        return 'Checking';
+  /// Angle: the same box, with a turn arrow beside it.
+  boxWithTurn,
+
+  /// Detail: corner brackets near the frame edge: fill the frame.
+  corners,
+}
+
+/// Where the guide sits for a shot type, in the frame's own coordinates.
+/// Guidance only: it shows the target the framing check already uses; it is
+/// not a criterion.
+class GuideShape {
+  /// Main and angle: the box is this share of the frame's height and width.
+  static const double boxShare = 0.60;
+
+  /// Detail: brackets this share of the frame's shorter side in from the edge.
+  static const double detailInset = 0.04;
+
+  final GuideKind kind;
+  final Rect rect;
+
+  const GuideShape(this.kind, this.rect);
+
+  static GuideShape forShot(String shotType, Rect frame) {
+    if (shotType == 'detail') {
+      return GuideShape(GuideKind.corners, frame.deflate(frame.shortestSide * detailInset));
     }
+    final box = Rect.fromCenter(
+        center: frame.center,
+        width: frame.width * boxShare,
+        height: frame.height * boxShare);
+    return GuideShape(shotType == 'angle' ? GuideKind.boxWithTurn : GuideKind.box, box);
   }
 }
 
@@ -257,7 +205,7 @@ class ScoredRegionGuide extends StatelessWidget {
           return CustomPaint(
             size: Size(c.maxWidth, c.maxHeight),
             painter: _ScoredRegionPainter(
-                rect: rect, borderColor: Colors.white70, showInnerBox: false),
+                rect: rect, borderColor: Colors.white70),
           );
         }),
       );
@@ -266,16 +214,9 @@ class ScoredRegionGuide extends StatelessWidget {
     final status = !hasData
         ? _FramingStatus.checking
         : (guidance.ready ? _FramingStatus.good : _FramingStatus.adjust);
-
-    final showInnerBox = shotType != 'detail';
-    final String caption;
-    if (shotType == 'detail') {
-      caption = 'Fill the frame with the label or texture';
-    } else if (shotType == 'angle') {
-      caption = 'Turn the product about 30 to 45 degrees';
-    } else {
-      caption = 'Place the product inside the box';
-    }
+    // The guide turns green when the existing /guidance framing check passes
+    // (v1.1.0); one instruction is shown below the frame, not here.
+    final framingOk = guidance.framingOk == true;
 
     return IgnorePointer(
       child: LayoutBuilder(
@@ -291,82 +232,17 @@ class ScoredRegionGuide extends StatelessWidget {
           // preview; a very tall preview then leaves darkened strips above and
           // below, which is where all text sits.
           final rectH = math.min(w * 5 / 4, h);
-          final top = (h - rectH) / 2;
-          final rect = Rect.fromLTWH(0, top, w, rectH);
-
-          return Stack(
-            children: [
-              Positioned.fill(
-                child: CustomPaint(
-                  painter: _ScoredRegionPainter(
-                    rect: rect,
-                    borderColor: status.color,
-                    showInnerBox: showInnerBox,
-                  ),
-                ),
-              ),
-              // Status chip, in the darkened strip ABOVE the scored region so it
-              // never covers the product.
-              Positioned(
-                top: (top - 44).clamp(8.0, double.infinity),
-                left: 0,
-                right: 0,
-                child: Center(child: _StatusChip(status: status)),
-              ),
-              // Per shot caption, in the darkened strip BELOW the scored region.
-              Positioned(
-                top: top + rectH + 10,
-                left: 24,
-                right: 24,
-                child: Text(
-                  caption,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.95),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    shadows: const [Shadow(color: Colors.black87, blurRadius: 5)],
-                  ),
-                ),
-              ),
-            ],
+          final rect = Rect.fromLTWH(0, (h - rectH) / 2, w, rectH);
+          return CustomPaint(
+            size: Size(w, h),
+            painter: _ScoredRegionPainter(
+              rect: rect,
+              borderColor: status.color,
+              guide: GuideShape.forShot(shotType, rect),
+              guideOk: framingOk,
+            ),
           );
         },
-      ),
-    );
-  }
-}
-
-/// A small pill showing the framing status as icon + word, so status is never
-/// carried by the border colour alone.
-class _StatusChip extends StatelessWidget {
-  final _FramingStatus status;
-
-  const _StatusChip({required this.status});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: status.color, width: 1.5),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(status.icon, color: status.color, size: 17),
-          const SizedBox(width: 6),
-          Text(
-            status.word,
-            style: TextStyle(
-              color: status.color,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -375,13 +251,21 @@ class _StatusChip extends StatelessWidget {
 class _ScoredRegionPainter extends CustomPainter {
   final Rect rect;
   final Color borderColor;
-  final bool showInnerBox;
+
+  /// The per shot guide; null draws the frame only (UNGUIDED study condition).
+  final GuideShape? guide;
+
+  /// The framing check passed: the guide is drawn solid green.
+  final bool guideOk;
 
   _ScoredRegionPainter({
     required this.rect,
     required this.borderColor,
-    required this.showInnerBox,
+    this.guide,
+    this.guideOk = false,
   });
+
+  static const _green = Color(0xFF2E7D32);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -413,23 +297,81 @@ class _ScoredRegionPainter extends CustomPainter {
     final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(16));
     canvas.drawRRect(rrect, border);
 
-    // Per shot target: a centred dashed box covering about 50% of the scored
-    // region's area (side factor sqrt(0.5)). Omitted for a detail close up,
-    // which is meant to fill the whole frame.
-    if (showInnerBox) {
-      const factor = 0.7071; // sqrt(0.5): 50% of the area
-      final boxW = rect.width * factor;
-      final boxH = rect.height * factor;
-      final box = Rect.fromCenter(
-          center: rect.center, width: boxW, height: boxH);
-      final dashPaint = Paint()
-        ..color = Colors.white.withValues(alpha: 0.9)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2;
-      _drawDashedRRect(
-          canvas, RRect.fromRectAndRadius(box, const Radius.circular(10)),
-          dashPaint);
+    final g = guide;
+    if (g == null) return;
+    // The guide: dashed white while adjusting, solid green once the framing
+    // check passes. A dark under-stroke keeps it visible on a white background.
+    final under = Paint()
+      ..color = Colors.black.withValues(alpha: 0.35)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4.5;
+    final paint = Paint()
+      ..color = guideOk ? _green : Colors.white.withValues(alpha: 0.95)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = guideOk ? 3.5 : 2.5
+      ..strokeCap = StrokeCap.round;
+    switch (g.kind) {
+      case GuideKind.box:
+      case GuideKind.boxWithTurn:
+        final box = RRect.fromRectAndRadius(g.rect, const Radius.circular(12));
+        if (guideOk) {
+          canvas.drawRRect(box, under);
+          canvas.drawRRect(box, paint);
+        } else {
+          _drawDashedRRect(canvas, box, under);
+          _drawDashedRRect(canvas, box, paint);
+        }
+        if (g.kind == GuideKind.boxWithTurn) _drawTurnArrow(canvas, g.rect, under, paint);
+      case GuideKind.corners:
+        final len = g.rect.shortestSide * 0.14;
+        final path = Path();
+        final r = g.rect;
+        for (final (corner, dx, dy) in [
+          (r.topLeft, 1.0, 1.0), (r.topRight, -1.0, 1.0),
+          (r.bottomLeft, 1.0, -1.0), (r.bottomRight, -1.0, -1.0),
+        ]) {
+          path
+            ..moveTo(corner.dx + dx * len, corner.dy)
+            ..lineTo(corner.dx, corner.dy)
+            ..lineTo(corner.dx, corner.dy + dy * len);
+        }
+        final thick = Paint()
+          ..color = paint.color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 4
+          ..strokeCap = StrokeCap.round;
+        canvas.drawPath(path, under..strokeWidth = 6);
+        canvas.drawPath(path, thick);
     }
+  }
+
+  /// A curved arrow to the right of the box: "turn the product".
+  void _drawTurnArrow(Canvas canvas, Rect box, Paint under, Paint paint) {
+    // Fits the space between the box and the frame edge, with a margin for the
+    // arrow head and the stroke.
+    final space = rect.right - box.right;
+    final radius = math.min(box.height * 0.12, space * 0.30);
+    final centre = Offset(box.right + space / 2, box.center.dy);
+    final arc = Rect.fromCircle(center: centre, radius: radius);
+    const start = -math.pi * 0.75, sweep = math.pi * 1.25;
+    final path = Path()..addArc(arc, start, sweep);
+    final end = Offset(centre.dx + radius * math.cos(start + sweep),
+        centre.dy + radius * math.sin(start + sweep));
+    final tangent = start + sweep + math.pi / 2;          // direction of travel
+    final head = radius * 0.45;
+    for (final side in [-0.5, 0.5]) {
+      final a = tangent + math.pi + side;
+      path
+        ..moveTo(end.dx, end.dy)
+        ..lineTo(end.dx + head * math.cos(a), end.dy + head * math.sin(a));
+    }
+    final solid = Paint()
+      ..color = paint.color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    canvas.drawPath(path, under);
+    canvas.drawPath(path, solid);
   }
 
   void _drawDashedRRect(Canvas canvas, RRect rrect, Paint paint,
@@ -449,5 +391,7 @@ class _ScoredRegionPainter extends CustomPainter {
   bool shouldRepaint(covariant _ScoredRegionPainter old) =>
       old.rect != rect ||
       old.borderColor != borderColor ||
-      old.showInnerBox != showInnerBox;
+      old.guide?.kind != guide?.kind ||
+      old.guide?.rect != guide?.rect ||
+      old.guideOk != guideOk;
 }

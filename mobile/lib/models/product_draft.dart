@@ -20,6 +20,9 @@ class ProductDraft {
   final String shop;
   final String contact;
 
+  /// Brand colour from My shop, "#RRGGBB" (v1.1.0).
+  final String brandColour;
+
   const ProductDraft({
     required this.name,
     this.price = '',
@@ -29,6 +32,7 @@ class ProductDraft {
     this.format = 'vertical',
     this.shop = '',
     this.contact = '',
+    this.brandColour = '',
   });
 
   /// The non-empty features, trimmed.
@@ -44,6 +48,7 @@ class ProductDraft {
         'format': format,
         'shop': shop,
         'contact': contact,
+        'brand_colour': brandColour,
       };
 }
 
