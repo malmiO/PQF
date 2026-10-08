@@ -1,0 +1,46 @@
+{
+ "n_images": 50,
+ "guidance_ms": {
+  "n": 30,
+  "median": 11.4,
+  "p90": 17.9
+ },
+ "technical_scoring_ms": {
+  "n": 50,
+  "median": 1044.4,
+  "p90": 1344.9
+ },
+ "determinism": {
+  "identical_rescores": 2,
+  "of": 50,
+  "max_abs_score_difference": 3.091971123581061e-13
+ },
+ "view_signature_jpeg75": {
+  "max_distance": 0.129,
+  "false_different_views": 0,
+  "of": 50
+ },
+ "video_render": {
+  "seconds": 40.9,
+  "video_seconds": 8.1
+ },
+ "tests": {
+  "summary": "166 passed, 82 warnings in 206.88s (0:03:26)",
+  "passed": 166
+ },
+ "environment": {
+  "python": "3.11.9",
+  "numpy": "1.26.4",
+  "opencv": "4.10.0",
+  "scipy": "1.13.1",
+  "metric_status": {
+   "abstaining": []
+  },
+  "gemini_model": "gemini-flash-lite-latest",
+  "prompt_version": "pqf-sem-v1",
+  "brisque": "0.2.0",
+  "pypiqe": "1.2",
+  "scikit-image": "0.24.0",
+  "google-genai": "1.0.0"
+ }
+}

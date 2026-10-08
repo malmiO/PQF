@@ -1,0 +1,308 @@
+{
+ "034f0d68f766cd016cd12e1427d4a060436c8f29a0f02f3b99853e1df02ccd23": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "b6ce63303bc1ed5b158cb2979e425c713d05f0b1d048ca67ee4dc3609bf3a760": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "6075914825b747f594b915a368d58bc38831a7517045f13f7e9f2e1d60914ea3": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "beb761cf97d9de746c18cd468c8a02893e71fe37c7ac197dc5b4af5bb5e0f0fb": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "b247ea19e5922f8a3ea473b85c6fed4d17f322c2f95e1e61774f3af97952ad67": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "4551a219572cd5202e6a8929bfdeb278cbf33b697dd405557f9dcbd2870f8a2d": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "fb876d60d7f428d15aa308fbcd7dd13e0b8f324c5b5894d4ec46f492ba1b4ec2": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "9751e156dccf3d63673b727329d4bed960f39c589bcb151a8262317da62de8eb": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "3ba8912757d650e2e5a829b1b8682a0bfddc2eb5df7ebeca9e23642a013117ba": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "a19c409b00c4e01fc4570947c8271daf588d902bbfd9e9ee78685cc55c45444a": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "6eb5ffd531707136c22148efe4c96ebd7bdd1e1cd6d3a85041591e215e9b0714": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "5181afe6a15abbb92357290a15863f19ccad4de4249c59b16b36954511923e2c": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "db1ab9bb1a07fbaf4dbcced4d8e99f0ace022923adfbce1871b3db766ebc7d9d": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "6c85b8b5d9a268078323e6b5179706d399b9fb7f7fd16d2d6243fdb34b6a18da": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "fca9482fb78b688920d6a43cbdfee943d00ec27a8b20de141f95ac64424b29fd": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "77175a3ad2793e26350e9c6c24914b209ab2c57ee71bd335bb555dee78601649": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "8cc9005d3b5c2e193747823cf623279ebe537e1220fca841f23ef0584990d303": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "cc1b6ced3ce96e3270d15eecc3e94826e976a4b4825571e66ec1bd11ed349f84": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "609bb823ffe81cc8184fdbaedc0cc8f16913e70c455fa21131da343d477fc5b4": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "342b9898f105515ae7792ac8f460fb39001b59249bf33a42b3345ed38a6c0d1a": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "58b700545a8e9286ff69b9728c7cb39f298ff7a64cd079da36178e50c0d648c8": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "5ef9de19d826cfd39773836cf4d597d0c46a6f19dfa6d6fd4ec12a974901a783": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "165ace131cd64126b7cc1eaf8e1567d665b428f82a6e5c587c122716c5f2126b": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "526c70ab057a67810633ddb5dcdf2849e736e9818d4cc74fff6f29bb312d3c4a": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "225f94c92a0c99dedf6e8e829a567dc7e1e85a082ac4a5db2abe3c5819ccbf4d": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "30ec86b5c14d92f246c89e89c3c5f7c44c11be06812204e754af6d8898a24360": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "86cb26c3a5b7cbf09057b26328e35a26c127f0e2308af3a39fd14d7bc1381e9a": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "585ca79620501152e4bd186a42a7cbaf15a9ac353d2f2b9bab57c912285b99b1": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "6c8073c3bbf4dd8a45b3855f073be70ed3a9a50d802e972c007db3472b28eaf6": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "270eefcfaddae522d92df1c7daf27ecd2ec34fbe276930d211190095653d328d": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "c27a7a0919d25bb1d8502e85d0b8fdb147cb1cb1f67f092ead1bf2e31e67113c": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "2bd77227242e2d6d5950d03685661275958962d1e34f5f68a278d03cbf599fae": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "9c4505e0135d360c668a0597f9b588693eaf42239eb6151af262f194fea9f20f": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "53ed8b681eaa45c78096fde3ba89cc7b5034f977cdc75b03b5a71ae4cdf153de": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "72b243124717ee4b0600133d7ace8b1babbcf511b3dab842cc4b330ee6674d7b": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "e96a34179aad308fd1191f361f1cdad036f81af0b739f9309b9258759b2e3815": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "4df2fc01851e5df0580577f57e45926e9c9cf837a8d0ff8d2df1afdac4d07dbe": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "9f1eabd83ba3fb72747a79fe55830b4d2f58842adfa74d6057c75c8c1b10fc70": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "ea3f98e71d16cd32f8bb0822e3bade374daec49722e09b56f0fd55e9dc0a6b62": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "f61247ad73b9eadd7a5a6ed687fec4929f278d2476f2f856740e3ed5e1d87c6d": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "7c839861433743151b7b80b70cbc4ca6201be7f0431862d5117dcb54cde61547": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "f54d9117cca6458c829cbc70868aa283e7381670940f86e52bf3d43ef5df429c": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "47af66166106704f0dccca2f4e6903a905c276f22589a5701023ee93fadef277": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "5e655494e3a62b32f53e23ec0be8afd343ec635e90de5535daeeae9175a45e8b": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "a5083b51f6c0e4ef2e3f42a59fe454f2d48d49f55c32d3951431a8dbf3d9249b": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "deaadcd64d2ea532008b75257587a16547d3f1a0673383ca41dd92acc0d29c80": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "ee3de98b87dd9d446650a61fa1880a5965256d75db85b6ea557d488ed2449372": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "1286379b06a6cc8323e49cdec34998877e1fe7fa837958eea9046ea0ae91a2f0": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "170ac091c6c0a475d9cc085b24e3ea6bd3fdbcc1f3383772f6d1dd87e9fa02e3": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "cff6175892ecd48e56676871d6be5d9b5765f816cd0335ee3e5eff45b3258408": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ },
+ "a800072f24bb6297e81914b72e9d56eef60334190d049a62b986855fb129a73c": {
+  "ok": false,
+  "scores": {},
+  "sqs": 0.0,
+  "error": "GEMINI_API_KEY not set"
+ }
+}
