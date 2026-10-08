@@ -2,6 +2,7 @@
   "$schema": "https://schema.railpack.com",
   "buildAptPackages": ["ffmpeg", "libgl1", "libglib2.0-0"],
   "deploy": {
+    "startCommand": "uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT",
     "aptPackages": ["ffmpeg", "libgl1", "libglib2.0-0"]
   }
 }
