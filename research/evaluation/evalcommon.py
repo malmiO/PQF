@@ -32,6 +32,14 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+# The semantic evaluator reads GEMINI_API_KEY from the environment; load the repo's .env
+# (as the server does) so --semantic works from a terminal. The key is never printed.
+try:
+    from dotenv import load_dotenv  # noqa: E402
+    load_dotenv(REPO / ".env")
+except ImportError:
+    pass
+
 from backend.pqf import config  # noqa: E402
 
 SPEC_PASS = {"sharpness": 0.20, "exposure": 0.60, "background": 0.55,
@@ -55,7 +63,8 @@ IMG_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 
 def discover(root: Path) -> list:
     """Every image under root with its label.
-    Researcher captures: pNN_CLEAN / pNN_V-<FAULT> (either separator).
+    Researcher captures: pNN_CLEAN (label "reference": the paired anchor, not in the good
+    group) / pNN_V-<FAULT> (label "degraded"), either separator.
     Anything under a folder named 'abo' is a professional catalogue image (good)."""
     rows = []
     for p in sorted(root.rglob("*")):
@@ -69,7 +78,9 @@ def discover(root: Path) -> list:
             rows.append({"path": str(p), "relpath": str(p.relative_to(root)),
                          "category": p.parent.name, "source": "researcher_capture",
                          "product": f"{p.parent.name}/{m.group(1).lower()}",
-                         "label": "good" if code == "CLEAN" else "degraded",
+                         # CLEAN captures are the PAIR ANCHOR for each fault, not part of the
+                         # good group: they are not catalogue standard (decisions.md 2026-10-08).
+                         "label": "reference" if code == "CLEAN" else "degraded",
                          "fault": fault, "target": VIOLATION.get(fault, "")})
         elif "abo" in parts:
             rows.append({"path": str(p), "relpath": str(p.relative_to(root)),

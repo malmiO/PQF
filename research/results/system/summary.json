@@ -1,32 +1,33 @@
 {
- "n_images": 50,
+ "n_images": 60,
  "guidance_ms": {
   "n": 30,
-  "median": 11.4,
-  "p90": 17.9
+  "median": 20.6,
+  "p90": 22.7
  },
  "technical_scoring_ms": {
-  "n": 50,
-  "median": 1044.4,
-  "p90": 1344.9
+  "n": 60,
+  "median": 1194.5,
+  "p90": 1381.1
  },
  "determinism": {
-  "identical_rescores": 2,
-  "of": 50,
-  "max_abs_score_difference": 3.091971123581061e-13
+  "identical_rescores": 4,
+  "of": 60,
+  "max_abs_score_difference": 2.2737367544323206e-13
  },
  "view_signature_jpeg75": {
-  "max_distance": 0.129,
-  "false_different_views": 0,
-  "of": 50
+  "max_distance": 0.721,
+  "false_different_views": 9,
+  "of": 60
  },
  "video_render": {
-  "seconds": 40.9,
+  "seconds": 75.3,
   "video_seconds": 8.1
  },
  "tests": {
-  "summary": "166 passed, 82 warnings in 206.88s (0:03:26)",
-  "passed": 166
+  "summary": "165 passed, 1 skipped, 82 warnings in 199.13s (0:03:19)",
+  "passed": 165,
+  "skipped": 1
  },
  "environment": {
   "python": "3.11.9",

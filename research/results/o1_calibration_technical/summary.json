@@ -1,7 +1,21 @@
 {
  "n_images": 52,
- "n_good": 29,
+ "n_good": 25,
  "n_degraded": 23,
+ "n_reference": 4,
+ "reference_clean_captures": {
+  "n": 4,
+  "below_threshold": {
+   "sharpness": 1,
+   "exposure": 0,
+   "background": 4,
+   "brisque": 0,
+   "piqe": 0,
+   "colorcast": 1
+  },
+  "framework_passed": 0,
+  "framework_n": 0
+ },
  "faults": {
   "BLUR": 4,
   "DARK": 4,
@@ -15,12 +29,12 @@
    "criterion": "sharpness",
    "label": "T1 Sharpness",
    "threshold": 0.2,
-   "n_good": 29,
-   "false_alarms": 2,
-   "false_alarm_rate": 0.069,
+   "n_good": 25,
+   "false_alarms": 1,
+   "false_alarm_rate": 0.04,
    "false_alarm_ci": [
-    0.019,
-    0.22
+    0.007,
+    0.195
    ],
    "n_faulty": 4,
    "detected": 2,
@@ -29,18 +43,18 @@
     0.15,
     0.85
    ],
-   "auc": 0.888
+   "auc": 0.91
   },
   {
    "criterion": "exposure",
    "label": "T2 Exposure",
    "threshold": 0.6,
-   "n_good": 29,
+   "n_good": 25,
    "false_alarms": 6,
-   "false_alarm_rate": 0.207,
+   "false_alarm_rate": 0.24,
    "false_alarm_ci": [
-    0.098,
-    0.384
+    0.115,
+    0.434
    ],
    "n_faulty": 8,
    "detected": 2,
@@ -49,18 +63,18 @@
     0.071,
     0.591
    ],
-   "auc": 0.491
+   "auc": 0.485
   },
   {
    "criterion": "background",
    "label": "T3 Background",
    "threshold": 0.55,
-   "n_good": 29,
-   "false_alarms": 5,
-   "false_alarm_rate": 0.172,
+   "n_good": 25,
+   "false_alarms": 1,
+   "false_alarm_rate": 0.04,
    "false_alarm_ci": [
-    0.076,
-    0.345
+    0.007,
+    0.195
    ],
    "n_faulty": 4,
    "detected": 4,
@@ -69,18 +83,18 @@
     0.51,
     1.0
    ],
-   "auc": 0.974
+   "auc": 1.0
   },
   {
    "criterion": "brisque",
    "label": "T4 BRISQUE",
    "threshold": 0.6,
-   "n_good": 29,
+   "n_good": 25,
    "false_alarms": 24,
-   "false_alarm_rate": 0.828,
+   "false_alarm_rate": 0.96,
    "false_alarm_ci": [
-    0.655,
-    0.924
+    0.805,
+    0.993
    ],
    "n_faulty": 0,
    "detected": 0,
@@ -92,12 +106,12 @@
    "criterion": "piqe",
    "label": "T5 PIQE",
    "threshold": 0.55,
-   "n_good": 29,
+   "n_good": 25,
    "false_alarms": 18,
-   "false_alarm_rate": 0.621,
+   "false_alarm_rate": 0.72,
    "false_alarm_ci": [
-    0.44,
-    0.773
+    0.524,
+    0.857
    ],
    "n_faulty": 0,
    "detected": 0,
@@ -109,12 +123,12 @@
    "criterion": "colorcast",
    "label": "T6 Colour cast",
    "threshold": 0.6,
-   "n_good": 29,
-   "false_alarms": 1,
-   "false_alarm_rate": 0.034,
+   "n_good": 25,
+   "false_alarms": 0,
+   "false_alarm_rate": 0.0,
    "false_alarm_ci": [
-    0.006,
-    0.172
+    0.0,
+    0.133
    ],
    "n_faulty": 0,
    "detected": 0,
@@ -208,14 +222,6 @@
    "brisque": 0.96,
    "piqe": 0.72,
    "colorcast": 0.0
-  },
-  "researcher_capture": {
-   "sharpness": 0.25,
-   "exposure": 0.0,
-   "background": 1.0,
-   "brisque": 0.0,
-   "piqe": 0.0,
-   "colorcast": 0.25
   }
  },
  "t0_fail": 0,
@@ -223,7 +229,7 @@
   "good": 0,
   "degraded": 1
  },
- "median_tech_ms": 1117.2,
+ "median_tech_ms": 1116.2,
  "subset": "calibration",
  "environment": {
   "python": "3.11.9",

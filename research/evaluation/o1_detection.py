@@ -61,16 +61,24 @@ def score_all(rows, semantic: bool, cache_path: Path, delay: float):
         rec["hard_reject"] = bool(tech.hard_reject)
         if semantic and rec["t0"] and not tech.hard_reject:
             key = sha(r["path"])
-            if key not in cache:
+            if key not in cache or not cache[key].get("ok"):   # old failed entries are retried
                 data = Path(r["path"]).read_bytes()
                 mime = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg"
                 if (img.shape[1], img.shape[0]) != (rec["width"], rec["height"]):
                     data, mime = cv2.imencode(".png", img)[1].tobytes(), "image/png"
                 s = evaluate_semantic(data, mime)
-                cache[key] = {"ok": s.ok, "scores": s.scores, "sqs": s.sqs, "error": s.error}
-                cache_path.write_text(json.dumps(cache, indent=1))
+                res = {"ok": s.ok, "scores": s.scores, "sqs": s.sqs, "error": s.error}
+                if not s.ok and ("not set" in str(s.error) or "API key" in str(s.error)
+                                 or "PERMISSION_DENIED" in str(s.error)):
+                    raise SystemExit(f"Semantic evaluator cannot run: {s.error}. Put GEMINI_API_KEY "
+                                     "in the repo's .env (it is loaded automatically, never printed).")
+                if s.ok:   # only real answers are cached; a failed call is retried next run
+                    cache[key] = res
+                    cache_path.write_text(json.dumps(cache, indent=1))
                 time.sleep(delay)
-            s = cache[key]
+            else:
+                res = cache[key]
+            s = res
             if s["ok"]:
                 rec.update({k: round(v, 4) for k, v in s["scores"].items()})
                 rec["sqs"] = round(s["sqs"], 4)
@@ -125,7 +133,7 @@ def summarise(rec: list) -> dict:
     # capture (same phone, room and session), so only the fault differs.
     from scipy.stats import binomtest   # exact sign test; with n = 4 the floor is p = 0.0625
     clean = {r["product"]: r for r in rec if r["source"] == "researcher_capture"
-             and r["label"] == "good"}
+             and r["label"] == "reference"}
     paired = []
     for fault, c in VIOLATION.items():
         prs = [(clean[r["product"]], r) for r in rec if r["fault"] == fault
@@ -152,7 +160,16 @@ def summarise(rec: list) -> dict:
         s = [r for r in good if r["source"] == src]
         by_source[src] = {c: round(sum(1 for r in s if c in r and r[c] < SPEC_PASS[c]) / len(s), 3)
                           for c in crit}
-    return {"n_images": len(rec), "n_good": len(good), "n_degraded": len(rec) - len(good),
+    # Researcher CLEAN captures: reported on their own (evidence for the environment rule).
+    ref = [r for r in rec if r["label"] == "reference"]
+    reference = {"n": len(ref),
+                 "below_threshold": {c: sum(1 for r in ref if c in r and r[c] < SPEC_PASS[c])
+                                     for c in crit},
+                 "framework_passed": sum(1 for r in ref if r.get("passed") is True),
+                 "framework_n": sum(1 for r in ref if "passed" in r)}
+    return {"n_images": len(rec), "n_good": len(good),
+            "n_degraded": sum(1 for r in rec if r["label"] == "degraded"),
+            "n_reference": len(ref), "reference_clean_captures": reference,
             "faults": {f: sum(1 for r in rec if r["fault"] == f) for f in VIOLATION},
             "per_criterion": per, "verdict": verdict, "paired": paired,
             "false_alarm_rate_by_good_source": by_source,
@@ -236,7 +253,8 @@ def markdown_synthetic(rows: list) -> str:
 
 def markdown(s: dict, title: str) -> str:
     L = [f"# {title}", "",
-         f"Images: {s['n_images']} ({s['n_good']} good, {s['n_degraded']} with one known fault). "
+         f"Images: {s['n_images']} ({s['n_good']} good catalogue images, {s['n_degraded']} with one "
+         f"known fault, {s.get('n_reference', 0)} researcher clean captures used only as pair anchors). "
          f"Thresholds: specification v1.3.", "",
          "| Criterion | Pass threshold | Detects its fault | False alarms on good images | AUC |",
          "|---|---|---|---|---|"]
@@ -254,6 +272,11 @@ def markdown(s: dict, title: str) -> str:
                      f"{r['score_lower_than_clean']}/{r['n_pairs']} | {r['flagged_below_threshold']}/{r['n_pairs']} | "
                      f"{r['clean_passed_fault_failed']}/{r['n_pairs']} | {r['median_change']:+.3f} | "
                      f"{r['sign_test_p_one_sided']} |")
+    ref = s.get("reference_clean_captures")
+    if ref and ref["n"]:
+        flag = ", ".join(f"{LABEL[c].split()[0]} {k}/{ref['n']}" for c, k in ref["below_threshold"].items() if k)
+        L += ["", f"Researcher clean captures (not in the good group): below threshold: {flag or 'none'}; "
+              f"framework passed {ref['framework_passed']}/{ref['framework_n']}."]
     v = s["verdict"]
     if v.get("n"):
         L += ["", "Framework verdict (image passes = FQS >= 0.55 and a role):", "",
