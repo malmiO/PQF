@@ -14,6 +14,11 @@ camera is open). Over the limit: HTTP 429 with a plain message, code
 first X-Forwarded-For entry. PQF_RATE_LIMIT=off disables the limits (the test
 suite, which calls these endpoints many times, sets it).
 
+Study exemption (v1.4.0-rc). A request that carries a VALID token AND the header
+X-PQF-Study: 1 skips the per-IP limits, so a study session on shared Wi-Fi is never
+stopped. The header alone is not enough: with no PQF_API_TOKEN set on the server the
+limits still apply.
+
 Neither is a framework criterion; they only protect the server and its AI quota.
 """
 from __future__ import annotations
@@ -28,6 +33,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 TOKEN_HEADER = "X-PQF-Token"
+STUDY_HEADER = "X-PQF-Study"
 OPEN_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
 QUERY_TOKEN_PREFIXES = ("/music/preview/",)
 
@@ -91,7 +97,12 @@ async def protect(request: Request, call_next):
                 "detail": "This app is not allowed to use the server: the access "
                           "token is wrong or missing.",
                 "code": "bad_token"})
-        wait = _rate_limited(_client_ip(request), path)
+        # Study sessions are never stopped by the per-IP limits (v1.4.0-rc): all
+        # participants share one Wi-Fi, so one IP could exhaust 20 /batch per hour.
+        # Exempt ONLY when a token is configured, it is valid, and the app says it is
+        # in a study (X-PQF-Study: 1). The request is still logged as usual.
+        study = bool(expected) and request.headers.get(STUDY_HEADER, "") == "1"
+        wait = 0 if study else _rate_limited(_client_ip(request), path)
         if wait:
             mins = max(1, round(wait / 60))
             return JSONResponse(status_code=429, headers={"Retry-After": str(wait)}, content={

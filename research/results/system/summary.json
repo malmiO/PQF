@@ -2,31 +2,31 @@
  "n_images": 60,
  "guidance_ms": {
   "n": 30,
-  "median": 20.6,
-  "p90": 22.7
+  "median": 43.3,
+  "p90": 49.7
  },
  "technical_scoring_ms": {
   "n": 60,
-  "median": 1194.5,
-  "p90": 1381.1
+  "median": 2397.9,
+  "p90": 3141.4
  },
  "determinism": {
-  "identical_rescores": 4,
+  "identical_rescores": 2,
   "of": 60,
-  "max_abs_score_difference": 2.2737367544323206e-13
+  "max_abs_score_difference": 2.545741395465484e-13
  },
  "view_signature_jpeg75": {
-  "max_distance": 0.721,
-  "false_different_views": 9,
+  "max_distance": 0.479,
+  "false_different_views": 2,
   "of": 60
  },
  "video_render": {
-  "seconds": 75.3,
+  "seconds": 119.1,
   "video_seconds": 8.1
  },
  "tests": {
-  "summary": "165 passed, 1 skipped, 82 warnings in 199.13s (0:03:19)",
-  "passed": 165,
+  "summary": "185 passed, 1 skipped, 212 warnings in 343.87s (0:05:43)",
+  "passed": 185,
   "skipped": 1
  },
  "environment": {
@@ -37,7 +37,7 @@
   "metric_status": {
    "abstaining": []
   },
-  "gemini_model": "gemini-flash-lite-latest",
+  "gemini_model": "gemini-3.5-flash-lite",
   "prompt_version": "pqf-sem-v1",
   "brisque": "0.2.0",
   "pypiqe": "1.2",

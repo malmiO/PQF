@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/study_session.dart';
 import 'pqf_api.dart';
+import 'study_data.dart';
 
 /// One JSON line per study event, written to the app's folder AND sent to
 /// POST /study/log (v1.1.0, Step 7). The local file is the copy that survives a
@@ -68,7 +69,10 @@ class StudyLog {
 
   /// A /batch result: every photo's scores and role, the framework's selection,
   /// and the gate result.
-  static Future<void> batchResult(List<Uint8List> images, BatchResult r) {
+  static Future<void> batchResult(List<Uint8List> images, BatchResult r) async {
+    // Every photo in a logged batch must also exist as a file (the upload path does
+    // not go through the camera). Photos already saved at capture are skipped.
+    await Future.wait(images.map((b) => StudyData.savePhoto(b)));
     final hashes = images.map(photoHash).toList();
     String h(int i) => (i >= 0 && i < hashes.length) ? hashes[i] : '';
     final selected = {for (final p in r.images) p.index: p.selected};
@@ -94,6 +98,10 @@ class StudyLog {
         'certified': r.certified,
         'missing': [for (final m in r.missing) m.role],
       },
+      // Which model answered and on which tier. Omitted when the server did not
+      // say (an older server), because the log refuses an empty value.
+      if (r.modelVersion.isNotEmpty) 'model_version': r.modelVersion,
+      if (r.tier.isNotEmpty) 'tier': r.tier,
     });
   }
 }

@@ -128,3 +128,30 @@ def test_log_download_needs_a_configured_token(log, monkeypatch):
     assert client.get("/study/log/download").status_code == 401        # no header
     r = client.get("/study/log/download", headers={"X-PQF-Token": "t0k"})
     assert r.status_code == 200 and json.loads(r.text.splitlines()[0])["participant"] == "P03"
+
+
+# --- v1.4.0-rc: the model that answered, and the API tier, on batch_result entries ----
+def test_batch_result_accepts_model_version_and_tier(log):
+    entry = _base("batch_result", model_version="gemini-3.5-flash-lite", tier="free",
+                  gate={"certified": True, "missing": []})
+    assert client.post("/study/log", content=json.dumps(entry)).status_code == 200
+    back = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
+    assert back["model_version"] == "gemini-3.5-flash-lite" and back["tier"] == "free"
+
+
+@pytest.mark.parametrize("bad", [
+    {"model_version": "x" * 65},                   # longer than 64
+    {"model_version": "gemini 3.5"},               # a space
+    {"model_version": "gemini/3.5"},               # a slash
+    {"model_version": 3.5},                        # not a string
+    {"tier": "free tier!"},
+])
+def test_model_version_and_tier_are_validated(log, bad):
+    entry = {**_base("batch_result"), **bad}
+    assert client.post("/study/log", content=json.dumps(entry)).status_code == 400
+    assert not log.exists()
+
+
+def test_model_version_only_on_batch_result(log):
+    entry = _base("capture_end", model_version="gemini-3.5-flash-lite")
+    assert client.post("/study/log", content=json.dumps(entry)).status_code == 400

@@ -189,6 +189,10 @@ class ScoreResponse(BaseModel):
     semantic: List[CriterionScore]
     feedback: List[str]
     elapsed_ms: int
+    # The model that answered ("" if no semantic call was made) and the API tier
+    # (v1.4.0-rc), so every result can be traced to the build that produced it.
+    model_version: str = ""
+    tier: str = ""
 
 
 class GuidanceResponse(BaseModel):
@@ -226,6 +230,8 @@ class BatchResponse(BaseModel):
     elapsed_ms: int
     images: list = []       # every photo: chosen or not, and why (2026-10-06)
     missing: list = []      # shots still to take: [{role, count, message}]
+    model_version: str = ""  # from the first semantic result of the request
+    tier: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -489,10 +495,15 @@ def health():
         _test_tones = any(t.is_test_tone for t in _A.recommend(None, _base).tracks)
     except Exception:
         _music_tracks, _test_tones = {m: 0 for m in _A.MOODS}, False
+    from ..pqf import RELEASE as _RELEASE
+    from ..pqf.semantic import evaluator as _ev
     return {
         "status": "ok",
         "framework_version": getattr(config, "SPEC_VERSION", "1.3"),
+        "release": _RELEASE,
         "semantic_model": getattr(config, "GEMINI_MODEL", "unknown"),
+        "last_model_version": _ev.LAST_MODEL_VERSION,
+        "tier": getattr(config, "GEMINI_TIER", ""),
         "semantic_mode": _semantic_mode(),
         "metrics": __import__("backend.pqf.technical", fromlist=["metric_status"]).metric_status(),
         "fqs_alpha": config.FQS_ALPHA,
@@ -538,6 +549,8 @@ def score(file: UploadFile = File(...)):
         role=d.role, passed=d.passed, hard_rejected=d.hard_rejected,
         reason=d.reason, technical=technical, semantic=semantic,
         feedback=feedback, elapsed_ms=int((time.time() - t0) * 1000),
+        model_version=getattr(d, "model_version", "") or "",
+        tier=config.GEMINI_TIER,
     )
 
 
@@ -698,10 +711,14 @@ def batch(files: List[UploadFile] = File(..., media_type="multipart/form-data"))
     }
     from .batch_explain import explain_batch
     _extra = explain_batch(result, FEEDBACK, config.SQS_PASS_THRESHOLDS)
+    # From the first image that reached the semantic model (v1.4.0-rc).
+    _mv = next((getattr(d, "model_version", "") for d in result.all_decisions
+                if getattr(d, "model_version", "")), "")
     return BatchResponse(images=_extra["images"], missing=_extra["missing"],
-                         
+
         certified=result.certified, selected=selected, role_sets=role_sets,
         recapture=result.recapture, elapsed_ms=int((time.time() - t0) * 1000),
+        model_version=_mv, tier=config.GEMINI_TIER,
     )
 
 # ---------------------------------------------------------------------------

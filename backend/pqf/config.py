@@ -126,7 +126,12 @@ ROLE_PRIORITY = ["hero_shot", "angle_shot", "detail_shot"]  # first match wins; 
 # ---------------------------------------------------------------------------
 # Semantic evaluator (Phase C)
 # ---------------------------------------------------------------------------
-GEMINI_MODEL = "gemini-flash-lite-latest"  # Gemini 3.5 Flash-Lite; pin & record resolved version at validation
+# 2026-10-10: pinned for evaluation v1.4.0. The alias "gemini-flash-lite-latest" resolved
+# to gemini-3.5-flash-lite on tools/model_check.py (callable). The alias can move to a
+# different model during the study, which would change semantic scores with no code change.
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+# The whole evaluation runs on the free Gemini tier (decided 2026-10; a limitation, disclosed).
+GEMINI_TIER = "free"
 GEMINI_TEMPERATURE = 0.0
 PROMPT_VERSION = "pqf-sem-v1"
 
