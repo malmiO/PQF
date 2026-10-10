@@ -34,6 +34,14 @@ class SemanticResult:
     prompt_version: str = config.PROMPT_VERSION
     ok: bool = True                               # False if parsing/model failed
     error: str = ""
+    # The model that actually answered (resp.model_version), so a result file can
+    # say which model produced it even if the configured name were an alias.
+    # "mock" in mock mode.
+    model_version: str = ""
+
+
+# The model_version of the most recent successful call, for /health.
+LAST_MODEL_VERSION: str = ""
 
 
 def _clip01(x) -> float:
@@ -87,7 +95,8 @@ def _mock_evaluate(image_bytes: bytes) -> SemanticResult:
     sqs = _aggregate_sqs(scores)
     role = "hero_shot" if sqs >= 0.6 else ("detail_shot" if sqs >= 0.4 else "reject")
     return SemanticResult(scores=scores, sqs=sqs, role=role,
-                          justification="[mock] deterministic score", ok=True)
+                          justification="[mock] deterministic score", ok=True,
+                          model_version="mock")
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +128,13 @@ def _gemini_evaluate(image_bytes: bytes, mime: str = "image/jpeg") -> SemanticRe
                 temperature=config.GEMINI_TEMPERATURE,
             ),
         )
-        return _parse_response(resp.text)
+        result = _parse_response(resp.text)
+        # The version that answered; fall back to the configured name.
+        result.model_version = str(getattr(resp, "model_version", None) or config.GEMINI_MODEL)
+        if result.ok:
+            global LAST_MODEL_VERSION
+            LAST_MODEL_VERSION = result.model_version
+        return result
     except Exception as e:  # network / quota / safety / model-not-found etc.
         return SemanticResult(ok=False, error=f"gemini call failed: {e}")
 
@@ -128,6 +143,8 @@ def evaluate_semantic(image_bytes: bytes, mime: str = "image/jpeg") -> SemanticR
     """Evaluate one image's semantic quality. Uses mock mode if PQF_SEMANTIC_MOCK=1
     or if no API key is present (so nothing crashes in a keyless environment)."""
     if os.environ.get("PQF_SEMANTIC_MOCK") == "1":
+        global LAST_MODEL_VERSION
+        LAST_MODEL_VERSION = "mock"
         return _mock_evaluate(image_bytes)
     if not os.environ.get("GEMINI_API_KEY"):
         # NO silent fallback (2026-10-01). Mock is opt in via PQF_SEMANTIC_MOCK=1.

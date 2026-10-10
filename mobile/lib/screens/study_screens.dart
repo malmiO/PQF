@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../config/api_config.dart';
 import '../models/study_session.dart';
+import '../services/study_data.dart';
 import '../services/study_log.dart';
 import 'product_form_screen.dart';
 
@@ -62,11 +63,82 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
   final _product = TextEditingController();
   int _session = 1;
 
+  // What study data is on this phone (photos and log), for the export card.
+  ({int photos, int bytes, bool hasLog})? _data;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshData();
+  }
+
   @override
   void dispose() {
     _participant.dispose();
     _product.dispose();
     super.dispose();
+  }
+
+  Future<void> _refreshData() async {
+    final d = await StudyData.summary();
+    if (mounted) setState(() => _data = d);
+  }
+
+  void _say(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// One zip (study_log.jsonl + study/photos/...) in Downloads/PQF/study.
+  Future<void> _export() async {
+    setState(() => _busy = true);
+    try {
+      final r = await StudyData.export();
+      _say(r.shared
+          ? 'Exported to Downloads/PQF/study: ${r.zip.path.split('/').last}'
+          : 'Android would not allow Downloads. The zip is in the app folder: '
+              '${r.zip.path}');
+    } on StateError catch (e) {
+      _say(e.message);
+    } catch (e) {
+      _say('Export failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+      await _refreshData();
+    }
+  }
+
+  Future<void> _delete() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete study data?'),
+        content: const Text(
+            'This permanently removes the study log and every saved photo from '
+            'this phone. Export first, and check the zip opens on the laptop. '
+            'This cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      await StudyData.deleteAll();
+      _say('Study data deleted from this phone.');
+    } catch (e) {
+      _say('Delete failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+      await _refreshData();
+    }
   }
 
   bool get _valid =>
@@ -152,6 +224,36 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
             onPressed: _valid ? _start : null,
             child: const Text('Start session'),
           ),
+          const SizedBox(height: 28),
+          const Divider(),
+          const SizedBox(height: 8),
+          const Text('Study data on this phone',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+          const SizedBox(height: 6),
+          Text(_data == null
+              ? 'Checking...'
+              : '${_data!.photos} photos '
+                  '(${(_data!.bytes / (1024 * 1024)).toStringAsFixed(1)} MB), '
+                  'log ${_data!.hasLog ? 'present' : 'none'}'),
+          const SizedBox(height: 12),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            onPressed: _busy ? null : _export,
+            child: const Text('Export study data'),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            // Never while a session is running: that would delete its photos.
+            onPressed: (_busy || active != null) ? null : _delete,
+            child: const Text('Delete study data from this phone'),
+          ),
+          if (active != null)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text('End the running session before deleting.',
+                  style: TextStyle(fontSize: 13)),
+            ),
         ],
       ),
     );

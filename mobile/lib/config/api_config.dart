@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+import '../models/study_session.dart';
+
 /// Configuration for reaching the PQF API.
 ///
 /// Settings come from a `.env` file that is not committed to the repository.
@@ -97,9 +99,16 @@ class ApiConfig {
   static String? get apiToken => _get('PQF_API_TOKEN');
 
   /// Headers every request carries.
+  ///
+  /// While a study session is running the requests also carry X-PQF-Study: 1, so
+  /// the server does not apply its per-IP limits to them (all participants share
+  /// one Wi-Fi). The server honours it only together with a valid token.
   static Map<String, String> get authHeaders {
     final t = apiToken;
-    return t == null ? const {} : {'X-PQF-Token': t};
+    return {
+      if (t != null) 'X-PQF-Token': t,
+      if (StudySession.current != null) 'X-PQF-Study': '1',
+    };
   }
 
   /// Shown on the home screen so the configured target is visible at a glance.

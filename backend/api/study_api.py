@@ -36,7 +36,13 @@ STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T[\d:.]+(Z|[+-]\d{2}:?\d{2})?$")
 MAX_BYTES = 64 * 1024
 
 ALLOWED = {"event", "timestamp", "participant", "condition", "product", "session",
-           "photo_hashes", "own_picks", "framework_selection", "photos", "gate", "times"}
+           "photo_hashes", "own_picks", "framework_selection", "photos", "gate", "times",
+           "model_version", "tier"}
+
+# The model that answered a batch (v1.4.0-rc) and the API tier. Codes only: letters,
+# digits, dot, dash, underscore; model_version up to 64 characters, tier up to 16.
+MODEL_VERSION = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+TIER = re.compile(r"^[A-Za-z0-9._-]{1,16}$")
 
 
 def log_path() -> Path:
@@ -132,6 +138,13 @@ def validate(entry: dict) -> dict:
                 any(v is not None and not STAMP.match(str(v)) for v in t.values()):
             raise ValueError(f"times keys are {sorted(TIME_KEYS)}, ISO 8601 values")
         out["times"] = dict(t)
+    for key, rx in (("model_version", MODEL_VERSION), ("tier", TIER)):
+        if key in entry:
+            if out["event"] != "batch_result":
+                raise ValueError(f"{key} is only allowed on batch_result entries")
+            if not isinstance(entry[key], str) or not rx.match(entry[key]):
+                raise ValueError(f"{key} must be a short code (letters, digits, . - _)")
+            out[key] = entry[key]
     return out
 
 

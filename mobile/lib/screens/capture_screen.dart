@@ -15,6 +15,7 @@ import '../widgets/guidance_overlay.dart';
 import '../widgets/error_view.dart';
 import '../widgets/help_sheet.dart';
 import '../models/study_session.dart';
+import '../services/study_data.dart';
 import '../services/study_log.dart';
 import 'results_screen.dart';
 import 'study_screens.dart';
@@ -537,6 +538,11 @@ class _CaptureScreenState extends State<CaptureScreen>
       }
 
       if (!mounted) return;
+
+      // Study mode: keep the photo itself, byte-identical to what is hashed and sent,
+      // at the moment it is taken, so a photo the participant later undoes is kept too.
+      // A no-op outside study mode; never throws.
+      unawaited(StudyData.savePhoto(bytes));
 
       setState(() {
         _captured.add(bytes);

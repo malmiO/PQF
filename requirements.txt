@@ -1,8 +1,11 @@
 # Pinned server environment (Railway reads this file). Verified 2026-10-01 in a clean Python 3.11 environment.
 # numpy MUST stay below 2: the brisque package crashes under numpy 2, and the
 # framework then silently abstains on T4 (scores it 1.0 for every image).
+#
+# v1.4.0-rc (2026-10-10): opencv-python-headless removed. pypiqe REQUIRES opencv-python,
+# so pip installs opencv-python anyway; two cv2 packages in one environment conflict.
+# pytest and httpx moved to requirements-dev.txt (the server does not need them).
 numpy==1.26.4
-opencv-python-headless==4.10.0.84
 opencv-python==4.10.0.84
 scikit-image==0.24.0
 scipy==1.13.1
@@ -13,5 +16,3 @@ uvicorn[standard]==0.32.1
 python-multipart==0.0.20
 python-dotenv==1.0.1
 google-genai==1.0.0
-pytest==8.3.4
-httpx==0.28.1

@@ -288,6 +288,11 @@ class BatchResult {
   /// Shots still needed; empty when certified.
   final List<MissingShot> missing;
 
+  /// The model that answered, and the API tier (v1.4.0-rc). Logged with every
+  /// study batch so a result can be traced to the build that produced it.
+  final String modelVersion;
+  final String tier;
+
   BatchResult({
     required this.certified,
     required this.selected,
@@ -295,6 +300,8 @@ class BatchResult {
     this.recapture,
     this.images = const [],
     this.missing = const [],
+    this.modelVersion = '',
+    this.tier = '',
   });
 
   factory BatchResult.fromJson(Map<String, dynamic> j) {
@@ -315,6 +322,8 @@ class BatchResult {
       missing: ((j['missing'] as List?) ?? const [])
           .map((s) => MissingShot.fromJson(s as Map<String, dynamic>))
           .toList(),
+      modelVersion: (j['model_version'] as String?) ?? '',
+      tier: (j['tier'] as String?) ?? '',
     );
   }
 

@@ -76,6 +76,10 @@ dependencies:
   # SHA-256 of photo bytes for the study log (already a transitive dependency).
   crypto: ^3.0.6
 
+  # Zip for the researcher's "Export study data" (already a transitive dependency
+  # of the image package; declared because the app now imports it directly).
+  archive: ^4.0.0
+
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8

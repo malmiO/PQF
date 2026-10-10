@@ -139,6 +139,8 @@ def score_image(image_bytes: bytes, path: str | None = None,
     d = decide_image(tech.tqs, sem.sqs, sem.scores)
     # Keep the per criterion technical scores available for reporting.
     setattr(d, "technical_scores", tech.scores)
+    # The model that answered, for the response and the study log (v1.4.0-rc).
+    setattr(d, "model_version", getattr(sem, "model_version", ""))
     return _with_sig(sig, d, path)
 
 

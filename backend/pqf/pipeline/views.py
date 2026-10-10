@@ -34,6 +34,9 @@ import numpy as np
 NEAR_DUPLICATE = 0.15     # below this, two photos show the same view
 SIG_SIZE = 32             # perceptual hash input size
 SIL_SIZE = 24             # silhouette grid
+VIEW_SMOOTH_SIGMA = 3.0   # px, smoothing of the background difference (signature only)
+VIEW_DIFF_LEVEL = 24      # grey levels from the background = product (signature only)
+VIEW_MIN_REGION = 0.002   # share of the frame a region needs to count (signature only)
 
 
 def _mask(img):
@@ -78,11 +81,42 @@ def product_box(img, mask=None) -> tuple:
     return (int(x0), int(y0), int(x1), int(y1))
 
 
+def _view_mask_and_box(img):
+    """Product mask and box FOR THE VIEW SIGNATURE ONLY (v1.4.0, 2026-10-09).
+
+    The framework's product_mask thresholds a hard pixel difference, which is right for
+    measuring the criteria but flips at faint edges when the same photo is re-encoded:
+    on 60 real lightbox photos 9 re-encoded copies were judged a "different view" (white
+    card, pale sticker sheets, pairs of earrings boxed one at a time). Here the difference
+    from the estimated background is smoothed first (Gaussian sigma 3 px) and the box
+    covers every significant region that does not touch the frame, so a pair or a card
+    is framed whole. Criteria, product_box (video framing) and NEAR_DUPLICATE unchanged.
+    """
+    import cv2
+    from .. import config
+    h, w = img.shape[:2]
+    b = max(2, int(min(h, w) * config.T3_BORDER_FRACTION))
+    border = np.concatenate([img[:b].reshape(-1, 3), img[-b:].reshape(-1, 3),
+                             img[:, :b].reshape(-1, 3), img[:, -b:].reshape(-1, 3)])
+    bg = np.median(border, axis=0).astype(np.float32)
+    diff = np.abs(img.astype(np.float32) - bg).max(axis=2)
+    m = cv2.GaussianBlur(diff, (0, 0), VIEW_SMOOTH_SIGMA) > VIEW_DIFF_LEVEL
+    n, _, st, _ = cv2.connectedComponentsWithStats(m.astype(np.uint8), 8)
+    keep = [i for i in range(1, n) if st[i][4] >= VIEW_MIN_REGION * h * w]
+    inner = [i for i in keep if not (st[i][0] == 0 or st[i][1] == 0 or
+                                     st[i][0] + st[i][2] >= w or st[i][1] + st[i][3] >= h)]
+    use = inner or keep
+    if not use:
+        return m, (w // 4, h // 4, 3 * w // 4, 3 * h // 4)
+    x0 = min(st[i][0] for i in use); y0 = min(st[i][1] for i in use)
+    x1 = max(st[i][0] + st[i][2] for i in use); y1 = max(st[i][1] + st[i][3] for i in use)
+    return m, (int(x0), int(y0), int(x1), int(y1))
+
+
 def view_signature(img) -> dict:
     """A compact description of the view, stored on the image's decision."""
     import cv2
-    m = _mask(img)
-    x0, y0, x1, y1 = product_box(img, m)
+    m, (x0, y0, x1, y1) = _view_mask_and_box(img)
     s = max(x1 - x0, y1 - y0, 8)
     cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
     g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)

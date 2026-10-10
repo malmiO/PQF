@@ -8,4 +8,4 @@ Scaffold only at this stage. Structure:
 - `lib/models/`   — data classes (score objects, gate results)
 
 The heavy criteria (BRISQUE, PIQE, LLM) run server-side; only lightweight
-real-time checks run on-device. See docs/PQF_Specification_v1.1.docx.
+real-time checks run on-device. See docs/PQF_Specification_v1.1.docx

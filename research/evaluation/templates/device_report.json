@@ -1,0 +1,9 @@
+{
+ "model": "", "manufacturer": "", "android_version": "", "android_api": 0, "abi_list": [],
+ "camera_hardware_level": "LEGACY|LIMITED|FULL|LEVEL_3|EXTERNAL", "autofocus": true,
+ "exposure_offset_range": [-2.0, 2.0], "exposure_step": 0.0,
+ "capture_resolution": [0, 0], "extensions_enabled": false,
+ "edge_modes": [], "noise_reduction_modes": [], "capabilities": [], "ram_mb": 0,
+ "guidance_round_trip_ms": [], "server_url": "", "network": "wifi|mobile",
+ "app_version": "", "captured_at": ""
+}
