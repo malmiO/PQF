@@ -5,6 +5,7 @@ import '../models/shot_plan.dart';
 import '../models/study_session.dart';
 import '../services/study_log.dart';
 import '../services/pqf_api.dart';
+import '../widgets/breakdown_panel.dart';
 import '../widgets/error_view.dart';
 import '../widgets/help_sheet.dart';
 import 'capture_screen.dart';
@@ -44,6 +45,15 @@ class _ResultsScreenState extends State<ResultsScreen> {
   bool _checking = false;
   ApiFailure? _failure;
 
+  /// The criteria in force (weights and pass thresholds), read once from the server
+  /// for the "Why this score" panels. Null until read, or if it cannot be read.
+  CriteriaInfo? _criteria;
+
+  /// True once a "Why this score" panel has been opened: the automatic move on to the
+  /// video is paused so the breakdown can be read, and a button continues instead.
+  /// Display only: it changes nothing about which photos are selected or certified.
+  bool _held = false;
+
   /// The photos of a /batch that failed, so Try again resends the same ones.
   List<Uint8List>? _pending;
   Timer? _autoNext;
@@ -53,7 +63,25 @@ class _ResultsScreenState extends State<ResultsScreen> {
     super.initState();
     _result = widget.result;
     _images = widget.images;
+    _loadCriteria();
     _scheduleVideo();
+  }
+
+  Future<void> _loadCriteria() async {
+    final r = await _api.criteria();
+    if (mounted && r.ok) setState(() => _criteria = r.value);
+  }
+
+  void _holdForReading() {
+    _autoNext?.cancel();
+    if (!_held && mounted) setState(() => _held = true);
+  }
+
+  BatchImageResult? _scoresFor(BatchPhoto p) {
+    for (final s in _result.selected) {
+      if (s.index == p.index) return s;
+    }
+    return null;
   }
 
   @override
@@ -132,6 +160,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
       _pending = null;
       _images = photos;
       _result = r.value!;
+      _held = false;
     });
     _scheduleVideo();
   }
@@ -168,7 +197,16 @@ class _ResultsScreenState extends State<ResultsScreen> {
                     style:
                         TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                ...set.map((p) => _SetCard(photo: p, bytes: _bytes(p))),
+                ...set.map((p) => _SetCard(
+                      photo: p,
+                      bytes: _bytes(p),
+                      breakdown: BreakdownPanel(
+                        photo: p,
+                        scores: _scoresFor(p),
+                        criteria: _criteria,
+                        onOpened: _holdForReading,
+                      ),
+                    )),
               ],
               if (notUsed.isNotEmpty) ...[
                 const SizedBox(height: 4),
@@ -182,7 +220,16 @@ class _ResultsScreenState extends State<ResultsScreen> {
                         style: const TextStyle(
                             fontSize: 15.5, fontWeight: FontWeight.w600)),
                     children: notUsed
-                        .map((p) => _NotUsedCard(photo: p, bytes: _bytes(p)))
+                        .map((p) => _NotUsedCard(
+                              photo: p,
+                              bytes: _bytes(p),
+                              breakdown: BreakdownPanel(
+                                photo: p,
+                                scores: _scoresFor(p),
+                                criteria: _criteria,
+                                onOpened: _holdForReading,
+                              ),
+                            ))
                         .toList(),
                   ),
                 ),
@@ -196,7 +243,15 @@ class _ResultsScreenState extends State<ResultsScreen> {
                 ),
                 const SizedBox(height: 12),
               ],
-              if (result.certified)
+              if (result.certified && _held)
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(50)),
+                  onPressed: _goToVideo,
+                  icon: const Icon(Icons.movie_creation_outlined),
+                  label: const Text('Continue to your video'),
+                )
+              else if (result.certified)
                 const Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -350,16 +405,20 @@ class _SetCard extends StatelessWidget {
   final BatchPhoto photo;
   final Uint8List? bytes;
 
-  const _SetCard({required this.photo, required this.bytes});
+  /// The read-only "Why this score" panel shown under the photo (display only).
+  final Widget? breakdown;
+
+  const _SetCard({required this.photo, required this.bytes, this.breakdown});
 
   @override
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Row(children: [
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.all(10),
+          child: Row(children: [
           _Thumb(bytes),
           const SizedBox(width: 14),
           Expanded(
@@ -393,7 +452,9 @@ class _SetCard extends StatelessWidget {
             ),
           ),
         ]),
-      ),
+        ),
+        if (breakdown != null) breakdown!,
+      ]),
     );
   }
 }
@@ -403,7 +464,10 @@ class _NotUsedCard extends StatelessWidget {
   final BatchPhoto photo;
   final Uint8List? bytes;
 
-  const _NotUsedCard({required this.photo, required this.bytes});
+  /// The read-only "Why this score" panel shown under the photo (display only).
+  final Widget? breakdown;
+
+  const _NotUsedCard({required this.photo, required this.bytes, this.breakdown});
 
   (IconData, Color, String) get _look {
     switch (photo.status) {
@@ -424,9 +488,10 @@ class _NotUsedCard extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Row(children: [
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.all(10),
+          child: Row(children: [
           _Thumb(bytes),
           const SizedBox(width: 14),
           Expanded(
@@ -453,7 +518,9 @@ class _NotUsedCard extends StatelessWidget {
             ),
           ),
         ]),
-      ),
+        ),
+        if (breakdown != null) breakdown!,
+      ]),
     );
   }
 }

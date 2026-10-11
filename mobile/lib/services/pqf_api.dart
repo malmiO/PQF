@@ -224,6 +224,12 @@ class BatchPhoto {
   /// A plain sentence for the owner, written by the server.
   final String message;
 
+  /// The per-criterion scores the framework computed for this photo (T1..T6 and
+  /// S1..S5), for DISPLAY only. Empty when the photo never reached that stage (a
+  /// hard reject has no semantic scores).
+  final Map<String, double> technical;
+  final Map<String, double> semantic;
+
   BatchPhoto({
     required this.index,
     required this.role,
@@ -232,7 +238,16 @@ class BatchPhoto {
     required this.selected,
     required this.status,
     required this.message,
+    this.technical = const {},
+    this.semantic = const {},
   });
+
+  static Map<String, double> _scores(Object? v) => v is Map
+      ? {
+          for (final e in v.entries)
+            if (e.value is num) e.key.toString(): (e.value as num).toDouble()
+        }
+      : const {};
 
   factory BatchPhoto.fromJson(Map<String, dynamic> j) => BatchPhoto(
         index: j['index'] as int,
@@ -242,6 +257,8 @@ class BatchPhoto {
         selected: (j['selected'] ?? false) as bool,
         status: (j['status'] ?? '') as String,
         message: (j['message'] ?? '') as String,
+        technical: _scores(j['technical']),
+        semantic: _scores(j['semantic']),
       );
 
   /// Order of a set photo: main, angles, detail, then anything else.
@@ -256,6 +273,44 @@ class BatchPhoto {
       default:
         return 3;
     }
+  }
+}
+
+/// One criterion as the server states it (GET /criteria): the pass threshold lives
+/// on the server, never in the app, so the screen shows the standard in force.
+class CriterionInfo {
+  final String name;
+  final double weight;
+  final double? passThreshold;
+
+  const CriterionInfo(this.name, this.weight, this.passThreshold);
+
+  factory CriterionInfo.fromJson(Map<String, dynamic> j) => CriterionInfo(
+        j['name'] as String,
+        ((j['weight'] ?? 0) as num).toDouble(),
+        (j['pass_threshold'] as num?)?.toDouble(),
+      );
+}
+
+/// GET /criteria, read once, for the per-criterion breakdown (display only).
+class CriteriaInfo {
+  final List<CriterionInfo> technical;
+  final List<CriterionInfo> semantic;
+  final double? fqsPass;
+
+  const CriteriaInfo(this.technical, this.semantic, this.fqsPass);
+
+  factory CriteriaInfo.fromJson(Map<String, dynamic> j) {
+    List<CriterionInfo> list(Object? v) => [
+          for (final e in (v as List? ?? const []))
+            CriterionInfo.fromJson(e as Map<String, dynamic>)
+        ];
+    final comb = j['combination'];
+    return CriteriaInfo(
+      list(j['technical']),
+      list(j['semantic']),
+      comb is Map ? (comb['pass_threshold'] as num?)?.toDouble() : null,
+    );
   }
 }
 
@@ -576,6 +631,24 @@ class PqfApi {
     final t = ApiConfig.apiToken;
     final q = t == null ? '' : '?token=${Uri.encodeQueryComponent(t)}';
     return '${ApiConfig.baseUrl}/music/preview/$trackId$q';
+  }
+
+  /// The criteria in force with their weights and pass thresholds (GET /criteria).
+  /// Used only to DISPLAY the standard beside each score; nothing is decided here.
+  Future<ApiResult<CriteriaInfo>> criteria() async {
+    try {
+      final r = await _client
+          .get(Uri.parse('${ApiConfig.baseUrl}/criteria'),
+              headers: ApiConfig.authHeaders)
+          .timeout(const Duration(seconds: 15));
+      if (r.statusCode != 200) {
+        return ApiResult.failure(_fromResponse(r.statusCode, r.body));
+      }
+      return ApiResult.success(
+          CriteriaInfo.fromJson(jsonDecode(r.body) as Map<String, dynamic>));
+    } catch (e) {
+      return ApiResult.failure(_classify(e));
+    }
   }
 
   /// Recommends a music mood and lists the installed tracks for a category.

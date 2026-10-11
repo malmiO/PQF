@@ -107,3 +107,5 @@ DEPLOY.md
 # Only the manifest is committed; the image folders (BLUR_L1, DARK_L2, ...) are not.
 research/results/synthetic/*/
 small.jpg
+
+source/

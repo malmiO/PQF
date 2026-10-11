@@ -76,7 +76,17 @@ def explain_batch(result, feedback: dict, thresholds: dict) -> dict:
     for i, d in enumerate(result.all_decisions):
         entry = {"index": i, "name": getattr(d, "path", ""), "role": d.role,
                  "fqs": round(d.fqs, 3), "passed": d.passed,
-                 "selected": id(d) in selected}
+                 "selected": id(d) in selected,
+                 # DISPLAY ONLY (v1.4.0): the per-criterion scores the framework already
+                 # computed for this photo, so the app can show the standard being
+                 # applied. Nothing is computed here and nothing reads these back. The
+                 # thresholds are served by GET /criteria and are not repeated here.
+                 # {} when the photo never reached that stage (e.g. a hard reject has no
+                 # semantic scores).
+                 "technical": {k: round(v, 3) for k, v in
+                               (getattr(d, "technical_scores", {}) or {}).items()},
+                 "semantic": {k: round(v, 3) for k, v in
+                              (d.semantic_scores or {}).items()}}
         note = getattr(d, "selection_note", "")
         if id(d) in selected:
             entry["status"] = "selected"

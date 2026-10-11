@@ -31,7 +31,7 @@ import statistics as st
 import time
 from pathlib import Path
 
-from evalcommon import (SPEC_PASS, TECH, SEM, LABEL, VIOLATION, discover, apply_split,
+from evalcommon import (SPEC_PASS, SPEC_PASS_V13, TECH, SEM, LABEL, VIOLATION, discover, apply_split,
                         sha, wilson, auc, fmt_ci, write_csv, save_json, environment,
                         platform_format)
 
@@ -251,11 +251,22 @@ def markdown_synthetic(rows: list) -> str:
     return "\n".join(L) + "\n"
 
 
+def _threshold_note() -> str:
+    """Say which thresholds the table used: the specification's (v1.3), and where the
+    server's own calibrated values (config.TQS_PASS_THRESHOLDS, v1.4.0) differ, which."""
+    diff = [f"{LABEL[k].split('(')[0].strip()} {SPEC_PASS[k]:g}" for k in ("brisque", "piqe")
+            if SPEC_PASS[k] != SPEC_PASS_V13[k]]
+    if not diff:
+        return "specification v1.3."
+    return ("specification v1.3, except " + " and ".join(diff) +
+            " (calibrated, v1.4.0; the server's own thresholds).")
+
+
 def markdown(s: dict, title: str) -> str:
     L = [f"# {title}", "",
          f"Images: {s['n_images']} ({s['n_good']} good catalogue images, {s['n_degraded']} with one "
          f"known fault, {s.get('n_reference', 0)} researcher clean captures used only as pair anchors). "
-         f"Thresholds: specification v1.3.", "",
+         f"Thresholds: {_threshold_note()}", "",
          "| Criterion | Pass threshold | Detects its fault | False alarms on good images | AUC |",
          "|---|---|---|---|---|"]
     for r in s["per_criterion"]:
