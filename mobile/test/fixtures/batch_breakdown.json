@@ -1,0 +1,280 @@
+{
+ "semantic_mode": "mock: values are arbitrary, shape and thresholds are real",
+ "batch": {
+  "certified": false,
+  "selected": [
+   {
+    "index": 0,
+    "fqs": 0.0,
+    "role": "reject",
+    "passed": false,
+    "tqs": 0.366,
+    "sqs": 0.0,
+    "reason": "hard_reject_tqs_below_0.4",
+    "weakest": "background"
+   },
+   {
+    "index": 1,
+    "fqs": 0.574,
+    "role": "reject",
+    "passed": false,
+    "tqs": 0.701,
+    "sqs": 0.49,
+    "reason": "below_fqs_pass_or_no_role",
+    "weakest": "background"
+   },
+   {
+    "index": 2,
+    "fqs": 0.42,
+    "role": "reject",
+    "passed": false,
+    "tqs": 0.638,
+    "sqs": 0.275,
+    "reason": "below_fqs_pass_or_no_role",
+    "weakest": "background"
+   },
+   {
+    "index": 3,
+    "fqs": 0.6,
+    "role": "angle_shot",
+    "passed": true,
+    "tqs": 0.66,
+    "sqs": 0.56,
+    "reason": "ok",
+    "weakest": "background"
+   }
+  ],
+  "role_sets": {
+   "hero_shot": [],
+   "angle_shot": [
+    "3.jpg"
+   ],
+   "detail_shot": []
+  },
+  "recapture": {
+   "gate_status": "fail",
+   "fail_reasons": [
+    "no_hero_shot",
+    "insufficient_angles",
+    "no_detail_shot",
+    "insufficient_coverage"
+   ],
+   "instruction": "Retake a strong front-facing hero shot (well-lit, centred, sharp).",
+   "counts": {
+    "total": 1,
+    "hero": 0,
+    "angle": 1,
+    "distinct_angles": 1,
+    "detail": 0
+   }
+  },
+  "elapsed_ms": 6176,
+  "images": [
+   {
+    "index": 0,
+    "name": "0.jpg",
+    "role": "reject",
+    "fqs": 0.0,
+    "passed": false,
+    "selected": false,
+    "technical": {
+     "sharpness": 0.057,
+     "exposure": 0.648,
+     "background": 0.0,
+     "brisque": 0.52,
+     "piqe": 0.515,
+     "colorcast": 1.0
+    },
+    "semantic": {},
+    "status": "not_good_enough",
+    "message": "Not used: Place the product on a plain white or light surface."
+   },
+   {
+    "index": 1,
+    "name": "1.jpg",
+    "role": "reject",
+    "fqs": 0.574,
+    "passed": false,
+    "selected": false,
+    "technical": {
+     "sharpness": 1.0,
+     "exposure": 1.0,
+     "background": 0.0,
+     "brisque": 0.599,
+     "piqe": 0.535,
+     "colorcast": 1.0
+    },
+    "semantic": {
+     "subject_centering": 0.337,
+     "feature_visibility": 0.741,
+     "marketing_suitability": 0.322,
+     "angle_value": 0.486,
+     "lighting_style_quality": 0.671
+    },
+    "status": "not_good_enough",
+    "message": "Not used: The shot does not look ready to post. Improve lighting and framing."
+   },
+   {
+    "index": 2,
+    "name": "2.jpg",
+    "role": "reject",
+    "fqs": 0.42,
+    "passed": false,
+    "selected": false,
+    "technical": {
+     "sharpness": 0.722,
+     "exposure": 1.0,
+     "background": 0.0,
+     "brisque": 0.626,
+     "piqe": 0.604,
+     "colorcast": 1.0
+    },
+    "semantic": {
+     "subject_centering": 0.118,
+     "feature_visibility": 0.129,
+     "marketing_suitability": 0.647,
+     "angle_value": 0.275,
+     "lighting_style_quality": 0.098
+    },
+    "status": "not_good_enough",
+    "message": "Not used: Centre the product in the frame and avoid cutting it off."
+   },
+   {
+    "index": 3,
+    "name": "3.jpg",
+    "role": "angle_shot",
+    "fqs": 0.6,
+    "passed": true,
+    "selected": true,
+    "technical": {
+     "sharpness": 0.761,
+     "exposure": 1.0,
+     "background": 0.0,
+     "brisque": 0.644,
+     "piqe": 0.673,
+     "colorcast": 1.0
+    },
+    "semantic": {
+     "subject_centering": 0.082,
+     "feature_visibility": 0.776,
+     "marketing_suitability": 0.882,
+     "angle_value": 0.82,
+     "lighting_style_quality": 0.024
+    },
+    "status": "selected",
+    "message": "Chosen: shows the product from another side."
+   }
+  ],
+  "missing": [
+   {
+    "role": "hero_shot",
+    "count": 1,
+    "message": "Take the main shot: the product straight on, centred, filling most of the frame."
+   },
+   {
+    "role": "angle_shot",
+    "count": 1,
+    "message": "Take 1 more photo from a different side or tilt."
+   },
+   {
+    "role": "detail_shot",
+    "count": 1,
+    "message": "Take a close-up of the most important detail, such as the texture, label or clasp."
+   }
+  ],
+  "model_version": "mock",
+  "tier": "free"
+ },
+ "criteria": {
+  "technical": [
+   {
+    "name": "sharpness",
+    "weight": 0.27,
+    "pass_threshold": 0.2
+   },
+   {
+    "name": "exposure",
+    "weight": 0.22,
+    "pass_threshold": 0.6
+   },
+   {
+    "name": "background",
+    "weight": 0.22,
+    "pass_threshold": 0.55
+   },
+   {
+    "name": "brisque",
+    "weight": 0.0,
+    "pass_threshold": 0.0
+   },
+   {
+    "name": "piqe",
+    "weight": 0.17,
+    "pass_threshold": 0.33
+   },
+   {
+    "name": "colorcast",
+    "weight": 0.12,
+    "pass_threshold": 0.6
+   }
+  ],
+  "semantic": [
+   {
+    "name": "subject_centering",
+    "weight": 0.25,
+    "pass_threshold": 0.6
+   },
+   {
+    "name": "feature_visibility",
+    "weight": 0.25,
+    "pass_threshold": 0.6
+   },
+   {
+    "name": "marketing_suitability",
+    "weight": 0.25,
+    "pass_threshold": 0.6
+   },
+   {
+    "name": "angle_value",
+    "weight": 0.15,
+    "pass_threshold": 0.5
+   },
+   {
+    "name": "lighting_style_quality",
+    "weight": 0.1,
+    "pass_threshold": 0.5
+   }
+  ],
+  "combination": {
+   "alpha": 0.4,
+   "beta": 0.6,
+   "pass_threshold": 0.55
+  },
+  "roles": {
+   "hero_shot": {
+    "fqs_min": 0.75,
+    "criteria_min": {
+     "subject_centering": 0.7,
+     "marketing_suitability": 0.7
+    }
+   },
+   "angle_shot": {
+    "fqs_min": 0.6,
+    "criteria_min": {
+     "angle_value": 0.6
+    }
+   },
+   "detail_shot": {
+    "fqs_min": 0.6,
+    "criteria_min": {
+     "feature_visibility": 0.7
+    }
+   }
+  },
+  "role_priority": [
+   "hero_shot",
+   "angle_shot",
+   "detail_shot"
+  ]
+ }
+}

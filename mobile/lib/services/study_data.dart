@@ -61,22 +61,29 @@ class StudyData {
   /// How much study data is on the phone.
   static Future<({int photos, int bytes, bool hasLog})> summary(
       [Directory? studyFolder]) async {
-    final root = await studyDir(studyFolder);
-    var photos = 0, bytes = 0;
-    final p = Directory('${root.path}/$photosDir');
-    if (await p.exists()) {
-      await for (final e in p.list(recursive: true, followLinks: false)) {
-        if (e is File) {
-          photos++;
-          bytes += await e.length();
+    // Never throws: this is read when the researcher screen opens, and a storage
+    // problem must not stop a session (the same rule as StudyLog.log).
+    try {
+      final root = await studyDir(studyFolder);
+      var photos = 0, bytes = 0;
+      final p = Directory('${root.path}/$photosDir');
+      if (await p.exists()) {
+        await for (final e in p.list(recursive: true, followLinks: false)) {
+          if (e is File) {
+            photos++;
+            bytes += await e.length();
+          }
         }
       }
+      return (
+        photos: photos,
+        bytes: bytes,
+        hasLog: await File('${root.path}/$logName').exists(),
+      );
+    } catch (e) {
+      debugPrint('[study] reading the study data summary failed: $e');
+      return (photos: 0, bytes: 0, hasLog: false);
     }
-    return (
-      photos: photos,
-      bytes: bytes,
-      hasLog: await File('${root.path}/$logName').exists(),
-    );
   }
 
   /// Builds ONE zip in [outDir] holding study_log.jsonl and study/photos/..., laid out

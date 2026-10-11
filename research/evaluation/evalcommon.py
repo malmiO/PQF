@@ -17,6 +17,14 @@ Pass thresholds (SPEC_PASS) are the specification's own, PQF Specification v1.3:
   T6 colour cast colorcast_norm >= 0.60                       (s3.7)
   S1-S3 >= 0.60, S4-S5 >= 0.50                                (s4.2, config.SQS_PASS_THRESHOLDS)
 No threshold here is tuned on evaluation data.
+
+v1.4.0 (2026-10-11): T4 and T5 are CALIBRATED, not the specification's 0.60 / 0.55. The
+values above are kept as SPEC_PASS_V13. SPEC_PASS takes the technical values from
+config.TQS_PASS_THRESHOLDS when it exists, so a frozen O1 run uses exactly the server's
+thresholds: T4 0.0 (T4 excluded; P10 = 0.0 on the pooled calibration set) and T5 0.33
+(P10 = 0.3349). Rule, pre-registered 2026-10-08: the 10th percentile of the normalised
+score over the pooled good calibration images (ABO calibration split + ABO extension,
+n = 125), rounded down to 2 decimals. T1-T3 and T6 are the specification's values.
 """
 from __future__ import annotations
 
@@ -42,9 +50,11 @@ except ImportError:
 
 from backend.pqf import config  # noqa: E402
 
-SPEC_PASS = {"sharpness": 0.20, "exposure": 0.60, "background": 0.55,
-             "brisque": 0.60, "piqe": 0.55, "colorcast": 0.60,
-             **config.SQS_PASS_THRESHOLDS}
+SPEC_PASS_V13 = {"sharpness": 0.20, "exposure": 0.60, "background": 0.55,
+                 "brisque": 0.60, "piqe": 0.55, "colorcast": 0.60,
+                 **config.SQS_PASS_THRESHOLDS}
+# The server's own thresholds when they exist (v1.4.0); the specification's otherwise.
+SPEC_PASS = {**SPEC_PASS_V13, **getattr(config, "TQS_PASS_THRESHOLDS", {})}
 TECH = list(config.TQS_WEIGHTS)
 SEM = list(config.SQS_WEIGHTS)
 LABEL = {"sharpness": "T1 Sharpness", "exposure": "T2 Exposure", "background": "T3 Background",
@@ -52,6 +62,9 @@ LABEL = {"sharpness": "T1 Sharpness", "exposure": "T2 Exposure", "background": "
          "subject_centering": "S1 Centring", "feature_visibility": "S2 Feature visibility",
          "marketing_suitability": "S3 Marketing suitability", "angle_value": "S4 Angle value",
          "lighting_style_quality": "S5 Lighting and style"}
+# A criterion carried at weight 0 stays in every table (computed and reported) and says why.
+if config.TQS_WEIGHTS.get("brisque", 1.0) == 0.0:
+    LABEL["brisque"] = "T4 BRISQUE (weight 0: failed construct validity in this domain)"
 
 # Constructed violations (frozen dataset, decisions.md 2026-08-05) -> target criterion
 VIOLATION = {"BLUR": "sharpness", "DARK": "exposure", "BRIGHT": "exposure",

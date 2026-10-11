@@ -32,7 +32,7 @@ import math
 import random
 from pathlib import Path
 
-from evalcommon import (SPEC_PASS, LABEL, discover, apply_split, write_csv, save_json,
+from evalcommon import (SPEC_PASS_V13 as SPEC_PASS, LABEL, discover, apply_split, write_csv, save_json,
                         environment, IMG_EXT, wilson)
 from o1_detection import score_all, load_manifest
 

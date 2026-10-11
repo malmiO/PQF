@@ -5,15 +5,17 @@ Still ASSEMBLY, never generation: every frame is a certified photograph, moved a
 captioned, so the quality guarantee survives into the video (decided 2026-09-25).
 The plan (plan.py) decides WHAT appears; this module decides HOW it looks.
 
-  * The product is FRAMED, not fitted: views.product_box finds it and each shot is
-    cropped around it, so it fills a large part of the frame.
+  * The product is FRAMED, not fitted: whole_product_box finds ALL of it (a pair is
+    framed together; the framework's views.product_box is the fallback) and each shot
+    is cropped around it, so it fills a large part of the frame.
   * Short form structure: hook (main shot, product name, shop), angles (pans), a
     FEATURE SCENE (the detail shot with the owner's key features pointed out by
     animated lines and labels), end card (price, call to action, contact, shop).
   * Owner text only, inside the 9:16 safe zones (top 14 percent, bottom 35 percent
     free of text) and never over the product.
-  * Pace matches the music mood (Yang et al., 2025, JTAER): calm slower with fades,
-    upbeat faster with slides. Each shot moves differently for visual variation.
+  * Pace matches the music mood (Yang et al., 2025, JTAER): calm holds each shot
+    longer, upbeat shorter. Transitions are quick slides for every mood (2026-10-11: a
+    dissolve stacked two photos). Each shot moves differently for visual variation.
 
 No claim is made that the video increases sales. It follows documented guidance.
 Text is English only; Sinhala needs complex script shaping and is future work.
@@ -36,9 +38,15 @@ FORMATS = {"vertical": (1080, 1920), "square": (1080, 1080)}
 # Safe zones as fractions of height - top and bottom kept free of text; side margin.
 SAFE = {"vertical": (0.14, 0.35, 0.06), "square": (0.07, 0.07, 0.07)}
 
+# Transitions (v1.4.0, 2026-10-11). The calm and elegant dissolves were 0.55 s and 0.50 s,
+# which with the easing held two full frames visibly stacked for most of a second (found
+# on a dry run, pair of earrings). Shortening the dissolve to 0.35 s still showed a 50/50
+# double exposure of two photos at different scales for about ten frames, so every mood
+# now uses a quick slide, which never blends two frames. Pace (how long each shot is held)
+# still follows the mood. Set "transition" back to "fade" to restore a dissolve.
 MOOD_STYLE = {
-    "calm":    {"pace": 1.25, "transition": "fade",  "trans_s": 0.55},
-    "elegant": {"pace": 1.10, "transition": "fade",  "trans_s": 0.50},
+    "calm":    {"pace": 1.25, "transition": "slide", "trans_s": 0.35},
+    "elegant": {"pace": 1.10, "transition": "slide", "trans_s": 0.35},
     "upbeat":  {"pace": 0.80, "transition": "slide", "trans_s": 0.30},
 }
 BASE_SECONDS = {"hook": 1.8, "angle": 2.1, "detail": 2.3, "end": 3.0}
@@ -63,6 +71,25 @@ FEATURE_WIDTH_FILL = 0.40  # feature scene: room for label columns on both sides
 LABEL_COLUMN = 0.235       # width share of each label column
 MAX_UPSCALE = 2.4          # never enlarge a photo more than this
 
+# Detail and feature shots (v1.4.0, 2026-10-11). The detail shot is an already cropped
+# plate that then pushes in, so MAX_UPSCALE 2.4 followed by the push enlarged a small
+# product up to about 2.7 times and read soft. For these two shots a small product now
+# stays smaller instead of being blurred, and the push itself is capped.
+DETAIL_MAX_UPSCALE = 1.5   # source -> frame enlargement allowed for detail / feature
+DETAIL_PUSH_MAX = 1.3      # the motion never enlarges the plate more than this
+
+# WHOLE-PRODUCT framing (v1.4.0, 2026-10-11). pipeline.views.product_box returns ONE
+# connected region, so a pair of earrings was framed as one earring and the other was cut
+# at the frame edge, on the end card too. The box is now taken over every significant
+# non-background region that does not touch the frame, as in the view signature fix of
+# 2026-10-09 (smoothed background difference). Constants are the same values.
+WHOLE_BORDER = 0.10        # border band used to estimate the background colour
+WHOLE_DIFF_LEVEL = 24      # grey levels from the background = product
+WHOLE_SMOOTH_SIGMA = 3.0   # px, smoothing of the difference (stops flicker at faint edges)
+WHOLE_MIN_REGION = 0.002   # share of the frame a region needs to count
+WHOLE_MARGIN = 0.04        # margin added on every side, as a share of the box size
+WHOLE_MAX_FRAME_SHARE = 0.85   # a box this big means segmentation failed: fall back
+
 FONT_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
 
 
@@ -80,14 +107,58 @@ class PromoResult:
 
 
 # --------------------------------------------------------------------------- framing
+def whole_product_box(img: np.ndarray):
+    """(x0, y0, x1, y1) around EVERY significant non-background region that does not
+    touch the frame edge, with a small margin; None if nothing significant is found or
+    the result is implausibly large (segmentation failed).
+
+    The background colour is the median of the border band; the difference from it is
+    smoothed (so faint edges do not flicker) and thresholded; every connected region of
+    at least WHOLE_MIN_REGION of the frame counts. A pair of earrings, a product with a
+    detached part, or a card with the product on it is therefore framed WHOLE, where
+    pipeline.views.product_box returns one connected region only. Regions that touch the
+    frame edge (a vignette, a shadow running off the photo) are ignored when anything
+    else was found, as in the view signature."""
+    h, w = img.shape[:2]
+    b = max(2, int(min(h, w) * WHOLE_BORDER))
+    border = np.concatenate([img[:b].reshape(-1, 3), img[-b:].reshape(-1, 3),
+                             img[:, :b].reshape(-1, 3), img[:, -b:].reshape(-1, 3)])
+    bg = np.median(border, axis=0).astype(np.float32)
+    diff = np.abs(img.astype(np.float32) - bg).max(axis=2)
+    mask = cv2.GaussianBlur(diff, (0, 0), WHOLE_SMOOTH_SIGMA) > WHOLE_DIFF_LEVEL
+    n, _, st, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
+    keep = [i for i in range(1, n) if st[i][4] >= WHOLE_MIN_REGION * h * w]
+    if not keep:
+        return None
+    inner = [i for i in keep if not (st[i][0] == 0 or st[i][1] == 0
+                                     or st[i][0] + st[i][2] >= w or st[i][1] + st[i][3] >= h)]
+    use = inner or keep
+    x0 = min(st[i][0] for i in use)
+    y0 = min(st[i][1] for i in use)
+    x1 = max(st[i][0] + st[i][2] for i in use)
+    y1 = max(st[i][1] + st[i][3] for i in use)
+    mx, my = WHOLE_MARGIN * (x1 - x0), WHOLE_MARGIN * (y1 - y0)
+    x0, y0 = max(0.0, x0 - mx), max(0.0, y0 - my)
+    x1, y1 = min(float(w), x1 + mx), min(float(h), y1 + my)
+    if (x1 - x0) * (y1 - y0) > WHOLE_MAX_FRAME_SHARE * w * h:
+        return None
+    return (float(x0), float(y0), float(x1), float(y1))
+
+
 def product_box_xywh(img: np.ndarray) -> tuple:
-    """(cx, cy, w, h) of the product in full resolution pixels."""
+    """(cx, cy, w, h) of the WHOLE product in full resolution pixels.
+
+    Whole-product box first (see whole_product_box); when that finds too little or
+    too much, the framework's own finder with its central region fallback."""
     try:
-        from ..pqf.pipeline.views import product_box
         h, w = img.shape[:2]
         k = 1024 / max(h, w)
         small = cv2.resize(img, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA)
-        x0, y0, x1, y1 = (v / k for v in product_box(small))
+        box = whole_product_box(small)
+        if box is None:
+            from ..pqf.pipeline.views import product_box
+            box = product_box(small)
+        x0, y0, x1, y1 = (v / k for v in box)
         return ((x0 + x1) / 2, (y0 + y1) / 2, max(20, x1 - x0), max(20, y1 - y0))
     except Exception:
         h, w = img.shape[:2]
@@ -95,15 +166,17 @@ def product_box_xywh(img: np.ndarray) -> tuple:
 
 
 def _plate(img: np.ndarray, out_w: int, out_h: int, fill_h: float, centre_y: float,
-           max_w_fill: float = MAX_WIDTH_FILL, oversample: float = 1.3):
+           max_w_fill: float = MAX_WIDTH_FILL, oversample: float = 1.3,
+           max_upscale: float = MAX_UPSCALE):
     """Crop around the product so it fills `fill_h` of the frame height (and at most
     `max_w_fill` of its width). Areas outside the photo continue the photo's own
     edges, blurred, with the photo feathered in, so no band or box is visible.
+    `max_upscale` is the most the photo may be enlarged (lower for detail shots).
     Returns (plate, to_plate) where to_plate maps photo (x, y) to plate pixels."""
     cx, cy, pw, ph = product_box_xywh(img)
     aspect = out_w / out_h
     crop_h = max(ph / fill_h, (pw / max_w_fill) / aspect)
-    crop_h = max(crop_h, out_h / MAX_UPSCALE)
+    crop_h = max(crop_h, out_h / max_upscale)
     crop_w = crop_h * aspect
     top = cy - crop_h * centre_y
     left = cx - crop_w / 2
@@ -168,8 +241,8 @@ def _matrix(plate_wh, out_w, out_h, t, motion, direction, anchor_y) -> np.ndarra
     base = out_w / W
     if motion == "push":                   # hook: quick push in
         z, dx = 1.0 + 0.08 * e, 0.0
-    elif motion == "deep":                 # detail: deeper push in
-        z, dx = 1.0 + 0.14 * e, 0.0
+    elif motion == "deep":                 # detail: deeper push in, never past the cap
+        z, dx = min(DETAIL_PUSH_MAX, 1.0 + 0.14 * e), 0.0
     elif motion == "pan":                  # angle: lateral pan with slight zoom
         z, dx = 1.05, (e - 0.5) * 0.05 * direction
     elif motion == "hold":                 # feature scene: almost still, labels readable
@@ -433,7 +506,8 @@ def feature_geometry(img: np.ndarray, callouts: list, fmt: str, brand=(31, 58, 9
     layout that would be drawn. Points are taken at the middle of the scene."""
     W, H = FORMATS[fmt]
     centre_y, fill_h = LAYOUT[fmt]["feature"]
-    plate, to_plate = _plate(img, W, H, fill_h, centre_y, FEATURE_WIDTH_FILL)
+    plate, to_plate = _plate(img, W, H, fill_h, centre_y, FEATURE_WIDTH_FILL,
+                             max_upscale=DETAIL_MAX_UPSCALE)
     ih, iw = img.shape[:2]
     pp = [to_plate(c["x"] * iw, c["y"] * ih) for c in callouts]
     M = _matrix(plate.shape[1::-1], W, H, 0.5, "hold", 1, centre_y)
@@ -497,6 +571,22 @@ def callout_guard(img: np.ndarray, callouts: list, fmt: str) -> dict:
                                               "and their lines do not cross."}
 
 
+def _transition_frame(a: np.ndarray, b: np.ndarray, p: float, kind: str) -> np.ndarray:
+    """One frame of the transition from `a` to `b` at progress p (0..1).
+
+    "slide": `a` leaves to the left as `b` enters from the right. Every pixel is from
+    one photo or the other, so two frames are never stacked.
+    "fade": a dissolve; at p = 0.5 the two photos are visibly blended."""
+    if kind == "slide":
+        w = a.shape[1]
+        shift = int(w * p)
+        out = np.empty_like(a)
+        out[:, :w - shift] = a[:, shift:]
+        out[:, w - shift:] = b[:, :shift]
+        return out
+    return cv2.addWeighted(a, 1 - p, b, p, 0)
+
+
 # --------------------------------------------------------------------------- build
 MOTION = {"hook": "push", "detail": "deep", "angle": "pan", "feature": "hold", "end": "settle"}
 
@@ -542,7 +632,10 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
             plate = g["plate"]
         else:
             wfill = FEATURE_WIDTH_FILL if kind == "feature" else MAX_WIDTH_FILL
-            plate, _ = _plate(img, W, H, fill_h, centre_y, wfill)
+            # Detail and feature shots may not be enlarged as far as the others, so a
+            # small product stays smaller rather than being blurred.
+            cap = DETAIL_MAX_UPSCALE if kind in ("detail", "feature") else MAX_UPSCALE
+            plate, _ = _plate(img, W, H, fill_h, centre_y, wfill, max_upscale=cap)
             g = None
         seg = dict(kind=kind, plate=plate, layer=_text_layer(shot, fmt, (W, H), brand),
                    dur=float(shot["seconds"]), motion=MOTION[kind], direction=direction,
@@ -628,14 +721,7 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
                 out = frames[0][2]
             else:
                 (_, _, a), (_, lb, b) = frames[0], frames[-1]
-                p = _ease(min(1.0, lb / tr))
-                if style["transition"] == "slide":
-                    shift = int(W * p)
-                    out = np.empty_like(a)
-                    out[:, :W - shift] = a[:, shift:]
-                    out[:, W - shift:] = b[:, :shift]
-                else:
-                    out = cv2.addWeighted(a, 1 - p, b, p, 0)
+                out = _transition_frame(a, b, _ease(min(1.0, lb / tr)), style["transition"])
             proc.stdin.write(np.ascontiguousarray(out).tobytes())
         proc.stdin.close()
         err = proc.stderr.read().decode(errors="ignore")

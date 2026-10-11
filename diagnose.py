@@ -112,7 +112,7 @@ def remote(url):
 
 
 VERIFY_IMAGE = "research/test_set/PASS_1_expect_accepted__511VodekMvL.jpg"
-BASELINE_TQS = 0.590         # corrected 2026-10-03 baseline, numpy 1.26.4 + real BRISQUE
+BASELINE_TQS = 0.679          
 
 
 def build_check() -> int:

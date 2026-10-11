@@ -323,8 +323,17 @@ def _platform_format(data: bytes) -> bytes:
 def _shape(d: ImageDecision) -> tuple[list, list, list]:
     """Turn a decision into per criterion lists plus corrective feedback."""
     tech_raw = getattr(d, "technical_scores", {}) or {}
+    # Each technical criterion is judged against its own pass threshold
+    # (config.TQS_PASS_THRESHOLDS, v1.4.0), replacing the blanket 0.40 cut. A criterion
+    # with weight 0 (T4, excluded) is still returned for reporting; its threshold is 0.0
+    # so it never gives feedback.
     technical = [
-        CriterionScore(name=k, score=round(tech_raw.get(k, 0.0), 3), weight=w)
+        CriterionScore(
+            name=k,
+            score=round(tech_raw.get(k, 0.0), 3),
+            weight=w,
+            passed=tech_raw.get(k, 0.0) >= config.TQS_PASS_THRESHOLDS[k],
+        )
         for k, w in config.TQS_WEIGHTS.items()
     ]
     semantic = [
@@ -339,7 +348,7 @@ def _shape(d: ImageDecision) -> tuple[list, list, list]:
 
     feedback = []
     for c in technical:
-        if c.score < 0.40 and c.name in FEEDBACK:
+        if c.passed is False and c.name in FEEDBACK:
             feedback.append(FEEDBACK[c.name])
     for c in semantic:
         if c.passed is False and c.name in FEEDBACK:
@@ -520,7 +529,9 @@ def criteria():
     """The criteria in force, so the client never hard codes them."""
     return {
         "technical": [
-            {"name": k, "weight": w} for k, w in config.TQS_WEIGHTS.items()
+            {"name": k, "weight": w,
+             "pass_threshold": config.TQS_PASS_THRESHOLDS.get(k)}
+            for k, w in config.TQS_WEIGHTS.items()
         ],
         "semantic": [
             {"name": k, "weight": w,
@@ -681,13 +692,18 @@ def batch(files: List[UploadFile] = File(..., media_type="multipart/form-data"))
         explained, which is why it previously showed only "Retake this one"
         (fixed 2026-10-05).
         """
+        from .batch_explain import weakest_technical
         tech = dict(getattr(d, "technical_scores", {}) or {})
         sem = dict(d.semantic_scores or {})
-        # For a hard reject use the technical scores alone; otherwise combine.
-        scores = tech if (getattr(d, "hard_rejected", False) and tech) \
-            else {**tech, **sem}
+        # For a hard reject use the technical scores alone, by largest shortfall below
+        # each criterion's pass threshold (v1.4.0); otherwise the lowest score of the
+        # combined set. A weight 0 criterion (T4) is never named: it gives no feedback.
+        if getattr(d, "hard_rejected", False) and tech:
+            return weakest_technical(tech)
+        scores = {**{k: v for k, v in tech.items()
+                     if config.TQS_WEIGHTS.get(k, 0.0) > 0.0}, **sem}
         if not scores:
-            return ""
+            return weakest_technical(tech)
         return min(scores.items(), key=lambda kv: kv[1])[0]
 
     # Report every image, not only the selected ones. An image that was left out

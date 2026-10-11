@@ -1,0 +1,75 @@
+{
+ "rule": "P10 of normalised score over good calibration images, rounded down to 2 decimals",
+ "seed": 20261008,
+ "bootstrap_B": 5000,
+ "n_good": 125,
+ "sources": [
+  "ABO",
+  "ABO_extension"
+ ],
+ "criteria": {
+  "brisque": {
+   "label": "T4 BRISQUE",
+   "spec_threshold": 0.6,
+   "spec_false_alarms": 114,
+   "percentile_value": 0.0,
+   "proposed_threshold": 0.0,
+   "proposed_raw_equivalent": 100.0,
+   "bootstrap_95ci_of_percentile": [
+    0.0,
+    0.054
+   ],
+   "calibration_false_alarms": 0,
+   "n_good": 125,
+   "calibration_false_alarm_ci": [
+    0.0,
+    0.03
+   ],
+   "median_good": 0.281,
+   "synthetic_NOISE": {
+    "1": "0/25",
+    "2": "0/25",
+    "3": "0/25"
+   }
+  },
+  "piqe": {
+   "label": "T5 PIQE",
+   "spec_threshold": 0.55,
+   "spec_false_alarms": 90,
+   "percentile_value": 0.3349,
+   "proposed_threshold": 0.33,
+   "proposed_raw_equivalent": 67.0,
+   "bootstrap_95ci_of_percentile": [
+    0.306,
+    0.368
+   ],
+   "calibration_false_alarms": 11,
+   "n_good": 125,
+   "calibration_false_alarm_ci": [
+    0.05,
+    0.151
+   ],
+   "median_good": 0.483,
+   "synthetic_JPEG": {
+    "1": "8/25",
+    "2": "11/25",
+    "3": "18/25"
+   }
+  }
+ },
+ "environment": {
+  "python": "3.11.9",
+  "numpy": "1.26.4",
+  "opencv": "4.10.0",
+  "scipy": "1.13.1",
+  "metric_status": {
+   "abstaining": []
+  },
+  "gemini_model": "gemini-3.5-flash-lite",
+  "prompt_version": "pqf-sem-v1",
+  "brisque": "0.2.0",
+  "pypiqe": "1.2",
+  "scikit-image": "0.24.0",
+  "google-genai": "1.0.0"
+ }
+}
