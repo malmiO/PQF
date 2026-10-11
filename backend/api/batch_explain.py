@@ -9,7 +9,28 @@ the framework (pipeline._select_best_set and the gate).
 """
 from __future__ import annotations
 
+from ..pqf import config
+
 ROLE_WORD = {"hero_shot": "main shot", "angle_shot": "angle", "detail_shot": "detail"}
+
+
+def weakest_technical(tech: dict) -> str:
+    """The technical criterion to explain a hard-rejected photo by (v1.4.0).
+
+    The one with the LARGEST SHORTFALL below its own pass threshold
+    (config.TQS_PASS_THRESHOLDS); if none is below its threshold, the lowest score.
+    A criterion with weight 0 (T4, excluded) is never chosen: it is reported but gives
+    no feedback, and BRISQUE reads low on most photographs, so it would otherwise be
+    named for nearly every rejected photo. Returns "" if there are no scores.
+    """
+    usable = {k: v for k, v in (tech or {}).items()
+              if config.TQS_WEIGHTS.get(k, 0.0) > 0.0}
+    pool = usable or dict(tech or {})
+    if not pool:
+        return ""
+    short = {k: config.TQS_PASS_THRESHOLDS.get(k, 0.0) - v for k, v in pool.items()}
+    k, gap = max(short.items(), key=lambda kv: kv[1])
+    return k if gap > 0 else min(pool, key=pool.get)
 
 CHOSEN = {
     "hero_shot": "Chosen as the main shot.",
@@ -39,7 +60,7 @@ def _weakest(d, feedback: dict, thresholds: dict) -> str:
     sem = d.semantic_scores or {}
     if d.hard_rejected or not sem:
         if tech:
-            k = min(tech, key=tech.get)
+            k = weakest_technical(tech)
             return "Not used: " + feedback.get(k, "the photo quality is too low.")
         return "Not used: the photo quality is too low. Retake it."
     gaps = {k: v - thresholds.get(k, 0.0) for k, v in sem.items()}

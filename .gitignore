@@ -101,3 +101,9 @@ study_log.jsonl
 PQF_Build_Pack_v1.4/
 research/results/formative_synthetic_2026-10-08/
 DEPLOY.md
+
+# Controlled synthetic faults (3.6 GB of lossless PNG, 2026-10-11). Reproducible: the generator
+# is research/evaluation/synthetic_faults.py (seeded) and manifest.csv records every fault.
+# Only the manifest is committed; the image folders (BLUR_L1, DARK_L2, ...) are not.
+research/results/synthetic/*/
+small.jpg

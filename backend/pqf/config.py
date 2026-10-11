@@ -25,18 +25,41 @@ T0_ASPECT_MAX = 1.91
 # Technical Quality Score (TQS) — six weighted criteria, sum = 1.00
 # v1.1 had five (0.25/0.20/0.20/0.20/0.15); v1.2 adds T6 and rebalances,
 # preserving rank order (T1 still highest, T5 still lowest of the originals).
+#
+# v1.4.0 (2026-10-11): T4 EXCLUDED. This is the one logged exception to "no existing
+# config value changes" (decisions.md 2026-10-11). The pre-registered condition
+# (decisions.md 2026-10-08) was met on the pooled calibration set (n = 125): the 10th
+# percentile of T4 is 0.0 (< 0.10), and synthetic noise RAISES T4 at every level
+# (median change +0.585 / +0.515 / +0.447; 0/75 noisy images score lower). T4 is still
+# computed and returned for reporting; it carries no weight and gives no feedback.
+# The weights are the previous ones without T4, divided by 0.82 and rounded so that they
+# sum to 1.00 and keep their order:
+#   T1 0.22 -> 0.27, T2 0.18 -> 0.22, T3 0.18 -> 0.22, T4 0.18 -> 0.00,
+#   T5 0.14 -> 0.17, T6 0.10 -> 0.12.
 # ---------------------------------------------------------------------------
 TQS_WEIGHTS = {
-    "sharpness":  0.22,   # T1
-    "exposure":   0.18,   # T2
-    "background": 0.18,   # T3
-    "brisque":    0.18,   # T4
-    "piqe":       0.14,   # T5
-    "colorcast":  0.10,   # T6  (added v1.2, 2026-08-13)
+    "sharpness":  0.27,   # T1
+    "exposure":   0.22,   # T2
+    "background": 0.22,   # T3
+    "brisque":    0.00,   # T4  (excluded in v1.4.0: failed construct validity in this domain)
+    "piqe":       0.17,   # T5
+    "colorcast":  0.12,   # T6  (added v1.2, 2026-08-13)
 }
 assert abs(sum(TQS_WEIGHTS.values()) - 1.0) < 1e-9, "TQS weights must sum to 1.00"
 
 TQS_HARD_REJECT = 0.40
+
+# Per-criterion pass thresholds (spec v1.3 s3; T4/T5 calibrated by the pre-registered rule,
+# decisions.md 2026-10-08 and 2026-10-11: P10 of the normalised score over the pooled good
+# calibration images, ABO calibration split + ABO extension, n = 125, rounded down to 2 dp).
+# These replace the blanket "score < 0.40" cut for technical feedback. Nothing in TQS, SQS,
+# FQS, the hard reject, roles, the gate or the selection depends on them.
+T4_PASS_THRESHOLD = 0.0    # T4 excluded: no feedback is ever given for it (P10 = 0.0)
+T5_PASS_THRESHOLD = 0.33   # P10 = 0.3349, bootstrap 95% CI [0.306, 0.368], raw PIQE <= 67
+TQS_PASS_THRESHOLDS = {"sharpness": 0.20, "exposure": 0.60, "background": 0.55,
+                       "brisque": T4_PASS_THRESHOLD, "piqe": T5_PASS_THRESHOLD,
+                       "colorcast": 0.60}
+assert set(TQS_PASS_THRESHOLDS) == set(TQS_WEIGHTS), "every technical criterion needs a pass threshold"
 
 # ---------------------------------------------------------------------------
 # Per-criterion parameters
