@@ -1,14 +1,22 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- The camera plugin declares RECORD_AUDIO by default, but this app opens
+         the camera with enableAudio:false and never records audio. Remove it so
+         the APK does not request the microphone (Play microphone disclosure). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
+    <!-- READ_MEDIA_IMAGES / READ_EXTERNAL_STORAGE are intentionally NOT declared:
+         the upload path uses the Android system photo picker (image_picker's
+         pickMultiImage), which needs no permission on any supported version.
+         WRITE_EXTERNAL_STORAGE is kept, capped at API 29, because the gal plugin
+         needs it to write the saved set and video to the gallery on Android 10;
+         on API 30+ scoped storage is used and no permission is required. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
     <application
-        android:label="mobile"
+        android:label="Éclat"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true"
         android:requestLegacyExternalStorage="true">
         <activity
             android:name=".MainActivity"

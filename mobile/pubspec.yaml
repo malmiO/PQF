@@ -95,6 +95,32 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+  # Generates the launcher icon (and Android 13+ themed icon) for every density
+  # from assets/branding/icon.png. Run: dart run flutter_launcher_icons
+  flutter_launcher_icons: ^0.14.1
+
+  # Generates the launch/splash screen from the same branding image.
+  # Run: dart run flutter_native_splash:create
+  flutter_native_splash: ^2.4.1
+
+# Launcher icon generation (placeholder art; replace assets/branding/icon.png
+# with the final 1024x1024 design, then re-run the generator).
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/branding/icon.png"
+  min_sdk_android: 29
+  adaptive_icon_background: "#1F3A63"
+  adaptive_icon_foreground: "assets/branding/icon.png"
+
+# Launch/splash screen (placeholder; brand navy with the same mark).
+flutter_native_splash:
+  color: "#1F3A63"
+  image: "assets/branding/icon.png"
+  android_12:
+    color: "#1F3A63"
+    image: "assets/branding/icon.png"
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
@@ -111,6 +137,7 @@ flutter:
     - assets/config.env
     - assets/examples/
     - assets/reference/
+    - assets/branding/
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
 

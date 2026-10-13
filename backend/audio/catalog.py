@@ -7,6 +7,7 @@ checks that what was recorded is complete and allowed, and fails loudly if not.
 from __future__ import annotations
 
 import csv
+import re
 import subprocess
 from pathlib import Path
 
@@ -30,9 +31,21 @@ def is_cc_by(licence: str) -> bool:
 
 
 def attribution_line(row: dict) -> str:
-    """The credit appended to the post caption for CC BY tracks."""
-    return (f"Music: {row.get('title', '')} by {row.get('artist', '')}, CC BY 4.0, "
-            f"{row.get('source_url', '')}").strip().rstrip(",")
+    """The credit appended to the post caption for CC BY tracks.
+
+    CC BY 4.0 requires naming the work and its author, linking the licence, and
+    INDICATING THAT CHANGES WERE MADE. The tracks are trimmed to the video
+    length, faded in and out, and loudness-normalised, so that is stated.
+    """
+    title = (row.get("title") or "").strip()
+    artist = (row.get("artist") or "").strip()
+    src = (row.get("source_url") or "").strip()
+    host = re.sub(r"^https?://", "", src).strip("/").split("/")[0]
+    where = f" ({host})" if host else ""
+    by = f" by {artist}" if artist else ""
+    return (f"{title}{by}{where}, licensed under CC BY 4.0 "
+            f"(https://creativecommons.org/licenses/by/4.0/). "
+            f"Edited: trimmed, faded, loudness-normalised.")
 
 
 def ffprobe_binary() -> str:

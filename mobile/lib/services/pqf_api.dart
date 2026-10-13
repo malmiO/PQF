@@ -68,6 +68,11 @@ class GuidanceResult {
   /// product reaches its target size. 1.0 means leave the zoom as it is.
   final double zoomHint;
 
+  /// The detected product's bounding box, normalised [x, y, w, h] within the
+  /// scored 4:5 region, or null when none was measured (2026-10-13). Display
+  /// only: the preview outlines it. It affects no score or decision.
+  final List<double>? productBox;
+
   GuidanceResult({
     required this.ready,
     required this.checks,
@@ -75,6 +80,7 @@ class GuidanceResult {
     required this.elapsedMs,
     this.exposureHint = 0,
     this.zoomHint = 1.0,
+    this.productBox,
   });
 
   factory GuidanceResult.fromJson(Map<String, dynamic> j) => GuidanceResult(
@@ -86,6 +92,9 @@ class GuidanceResult {
         elapsedMs: j['elapsed_ms'] as int,
         exposureHint: (j['exposure_hint'] as num?)?.toInt() ?? 0,
         zoomHint: (j['zoom_hint'] as num?)?.toDouble() ?? 1.0,
+        productBox: (j['product_box'] as List?)
+            ?.map((v) => (v as num).toDouble())
+            .toList(),
       );
 
   /// The order fixes are asked for (v1.1.0): framing first (where the product
@@ -511,6 +520,19 @@ class RenderedVideo {
   });
 }
 
+/// A summary of the server from GET /health, for the About screen.
+class HealthInfo {
+  final String release;
+  final String frameworkVersion;
+
+  const HealthInfo({required this.release, required this.frameworkVersion});
+
+  factory HealthInfo.fromJson(Map<String, dynamic> j) => HealthInfo(
+        release: (j['release'] ?? '') as String,
+        frameworkVersion: (j['framework_version'] ?? '') as String,
+      );
+}
+
 /// Client for the PQF API.
 ///
 /// Every method returns an [ApiResult] rather than throwing, so a caller never
@@ -813,6 +835,23 @@ class PqfApi {
       ));
     } catch (e) {
       return ApiResult.failure(_videoThrown('POST /video/render', e));
+    }
+  }
+
+  /// The server's release and framework version (GET /health), for the About
+  /// screen. Open endpoint, so no token is needed.
+  Future<ApiResult<HealthInfo>> healthInfo() async {
+    try {
+      final r = await _client
+          .get(Uri.parse('${ApiConfig.baseUrl}/health'))
+          .timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) {
+        return ApiResult.failure(_fromResponse(r.statusCode, r.body));
+      }
+      return ApiResult.success(
+          HealthInfo.fromJson(jsonDecode(r.body) as Map<String, dynamic>));
+    } catch (e) {
+      return ApiResult.failure(_classify(e));
     }
   }
 

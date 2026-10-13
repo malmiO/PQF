@@ -9,6 +9,7 @@ import 'onboarding_screen.dart';
 import 'product_form_screen.dart';
 import 'business_profile_screen.dart';
 import 'study_screens.dart';
+import 'about_screen.dart';
 
 /// Entry point. Kept deliberately short, because every screen before the camera
 /// is a screen between the seller and the thing they came to do.
@@ -135,13 +136,26 @@ class _HomeScreenState extends State<HomeScreen> {
                           label: const Text('My shop'),
                         ),
                         const SizedBox(height: 4),
-                        TextButton.icon(
-                          onPressed: () =>
-                              Navigator.of(context).push(MaterialPageRoute(
-                            builder: (_) => const OnboardingScreen(),
-                          )),
-                          icon: const Icon(Icons.help_outline, size: 18),
-                          label: const Text('How it works'),
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          children: [
+                            TextButton.icon(
+                              onPressed: () =>
+                                  Navigator.of(context).push(MaterialPageRoute(
+                                builder: (_) => const OnboardingScreen(),
+                              )),
+                              icon: const Icon(Icons.help_outline, size: 18),
+                              label: const Text('How it works'),
+                            ),
+                            TextButton.icon(
+                              onPressed: () =>
+                                  Navigator.of(context).push(MaterialPageRoute(
+                                builder: (_) => const AboutScreen(),
+                              )),
+                              icon: const Icon(Icons.info_outline, size: 18),
+                              label: const Text('About'),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 8),
                       ],

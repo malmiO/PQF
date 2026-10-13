@@ -98,6 +98,20 @@ class ApiConfig {
   /// The server only checks it when its own PQF_API_TOKEN is set.
   static String? get apiToken => _get('PQF_API_TOKEN');
 
+  /// Public website, privacy policy and feedback links shown on the About and
+  /// consent screens. Null when not configured, so the UI hides the link.
+  static String? get websiteUrl => _get('PQF_WEBSITE_URL');
+  static String? get privacyUrl => _get('PQF_PRIVACY_URL');
+  static String? get feedbackUrl => _get('PQF_FEEDBACK_URL');
+
+  /// Which Google Gemini tier the server uses (PQF_GEMINI_TIER): "paid" or
+  /// "free". It decides the one data-use sentence on the consent screen. The
+  /// safer default is "free", which discloses the broader use.
+  static String get geminiTier {
+    final v = _get('PQF_GEMINI_TIER')?.toLowerCase();
+    return v == 'paid' ? 'paid' : 'free';
+  }
+
   /// Headers every request carries.
   ///
   /// While a study session is running the requests also carry X-PQF-Study: 1, so

@@ -187,12 +187,18 @@ class ScoredRegionGuide extends StatelessWidget {
   /// (same crop), but no status, no caption and no framing target.
   final bool neutral;
 
+  /// The detected product box, normalised [x, y, w, h] within the scored 4:5
+  /// region, or null. Drawn as a thin outline next to the target box (guided
+  /// only, display only — 2026-10-13).
+  final List<double>? productBox;
+
   const ScoredRegionGuide({
     super.key,
     required this.guidance,
     required this.waiting,
     required this.shotType,
     this.neutral = false,
+    this.productBox,
   });
 
   @override
@@ -233,6 +239,17 @@ class ScoredRegionGuide extends StatelessWidget {
           // below, which is where all text sits.
           final rectH = math.min(w * 5 / 4, h);
           final rect = Rect.fromLTWH(0, (h - rectH) / 2, w, rectH);
+          // Map the normalised product box into the scored rectangle.
+          Rect? boxRect;
+          final pb = productBox;
+          if (pb != null && pb.length == 4) {
+            boxRect = Rect.fromLTWH(
+              rect.left + pb[0] * rect.width,
+              rect.top + pb[1] * rect.height,
+              pb[2] * rect.width,
+              pb[3] * rect.height,
+            );
+          }
           return CustomPaint(
             size: Size(w, h),
             painter: _ScoredRegionPainter(
@@ -240,6 +257,7 @@ class ScoredRegionGuide extends StatelessWidget {
               borderColor: status.color,
               guide: GuideShape.forShot(shotType, rect),
               guideOk: framingOk,
+              productBox: boxRect,
             ),
           );
         },
@@ -258,11 +276,16 @@ class _ScoredRegionPainter extends CustomPainter {
   /// The framing check passed: the guide is drawn solid green.
   final bool guideOk;
 
+  /// The detected product box in preview coordinates, or null. Drawn as a thin
+  /// outline so the user sees what the framing check found (display only).
+  final Rect? productBox;
+
   _ScoredRegionPainter({
     required this.rect,
     required this.borderColor,
     this.guide,
     this.guideOk = false,
+    this.productBox,
   });
 
   static const _green = Color(0xFF2E7D32);
@@ -296,6 +319,24 @@ class _ScoredRegionPainter extends CustomPainter {
       ..strokeWidth = 3;
     final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(16));
     canvas.drawRRect(rrect, border);
+
+    // The detected product box: a thin cyan outline with a dark under-stroke,
+    // drawn next to the target box so the user sees what was detected. Display
+    // only; never carries pass/fail (that is the border and banner).
+    final pb = productBox;
+    if (pb != null && pb.width > 0 && pb.height > 0) {
+      final boxUnder = Paint()
+        ..color = Colors.black.withValues(alpha: 0.35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3;
+      final boxPaint = Paint()
+        ..color = const Color(0xFF29B6F6).withValues(alpha: 0.95)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5;
+      final rr = RRect.fromRectAndRadius(pb, const Radius.circular(6));
+      canvas.drawRRect(rr, boxUnder);
+      canvas.drawRRect(rr, boxPaint);
+    }
 
     final g = guide;
     if (g == null) return;
@@ -393,5 +434,6 @@ class _ScoredRegionPainter extends CustomPainter {
       old.borderColor != borderColor ||
       old.guide?.kind != guide?.kind ||
       old.guide?.rect != guide?.rect ||
-      old.guideOk != guideOk;
+      old.guideOk != guideOk ||
+      old.productBox != productBox;
 }

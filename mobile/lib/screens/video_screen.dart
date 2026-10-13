@@ -155,7 +155,8 @@ class _VideoScreenState extends State<VideoScreen> {
         automaticallyImplyLeading: false,
         actions: const [HelpButton(HelpTopic.video)],
       ),
-      body: ListView(
+      body: SafeArea(
+        child: ListView(
         padding: const EdgeInsets.all(18),
         children: [
           Center(
@@ -246,6 +247,7 @@ class _VideoScreenState extends State<VideoScreen> {
             child: const Text('Done'),
           ),
         ],
+      ),
       ),
     );
   }

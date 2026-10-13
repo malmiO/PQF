@@ -13,7 +13,9 @@ Mounted in main.py with: app.include_router(video_router)
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
 import shutil
 import tempfile
@@ -57,6 +59,33 @@ def _cleanup():
                 shutil.rmtree(d, ignore_errors=True)
         except OSError:
             pass
+
+
+# How often the background sweep runs. The 3-hour retention (KEEP_HOURS) is the
+# promise; this sweep makes it real even when no new /video request ever arrives
+# to trigger the lazy _cleanup() inside /video/plan and /video/render.
+SWEEP_INTERVAL_SECONDS = 600  # 10 minutes
+
+
+async def _sweep_loop():
+    while True:
+        await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+        try:
+            _cleanup()
+        except Exception:  # never let the sweep die on a transient FS error
+            logging.getLogger("pqf.video").exception("video session sweep failed")
+
+
+def start_session_sweeper() -> asyncio.Task:
+    """Delete stale video sessions on a timer, independent of request traffic.
+
+    Runs _cleanup() ONCE immediately, then every SWEEP_INTERVAL_SECONDS, so a
+    session older than KEEP_HOURS is removed within ~10 minutes of expiry even
+    if the server receives no further /video calls. Returns the background task
+    so the caller (app startup) can keep a reference / cancel it on shutdown.
+    """
+    _cleanup()  # once at startup
+    return asyncio.create_task(_sweep_loop())
 
 
 def _session(plan_id: str) -> Path:

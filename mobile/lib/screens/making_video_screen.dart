@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../services/pqf_api.dart';
+import '../widgets/confirm_leave.dart';
 import '../widgets/error_view.dart';
 import '../widgets/help_sheet.dart';
 import 'video_screen.dart';
@@ -103,7 +104,22 @@ class _MakingVideoScreenState extends State<MakingVideoScreen> {
     final planDone = _plan != null;
     final failedPlanning = _failure != null && _step == _Step.planning;
     final failedRendering = _failure != null && _step == _Step.rendering;
-    return Scaffold(
+    // While the video is being made, leaving aborts it; confirm first. Once it
+    // has failed, going back is free (nothing is in progress).
+    final inProgress = _failure == null;
+    return PopScope(
+      canPop: !inProgress,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final leave = await confirmLeave(
+          context,
+          title: 'Stop making the video?',
+          message: 'Your video is still being made. If you leave now it will '
+              'not be finished.',
+        );
+        if (leave && context.mounted) Navigator.of(context).pop();
+      },
+      child: Scaffold(
       appBar: AppBar(title: const Text('Making your video'),
           actions: const [HelpButton(HelpTopic.makingVideo)]),
       body: SafeArea(
@@ -143,6 +159,7 @@ class _MakingVideoScreenState extends State<MakingVideoScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 }

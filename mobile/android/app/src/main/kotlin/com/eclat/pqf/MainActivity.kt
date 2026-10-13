@@ -1,4 +1,4 @@
-package com.example.mobile
+package com.eclat.pqf
 
 import io.flutter.embedding.android.FlutterActivity
 
