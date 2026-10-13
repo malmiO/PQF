@@ -207,6 +207,11 @@ class GuidanceResponse(BaseModel):
     # the product reaches its target size (1.0 = leave it). Measured on the frame
     # as the camera sends it, so it is always relative to the current zoom.
     zoom_hint: float = 1.0
+    # The detected product's bounding box, normalised (x, y, w, h in 0..1) WITHIN
+    # the scored 4:5 region, or null when none was measured. Additive and display
+    # only: the app outlines it over the preview. It never affects any score or
+    # pass/fail decision (2026-10-13).
+    product_box: list[float] | None = None
 
 
 class BatchImageResult(BaseModel):
@@ -433,6 +438,16 @@ def _framing_check(img, T, min_area: float = None, max_area: float = None,
         info["area"] = area
         info["reach"] = max(abs(left / w - 0.5), abs((right + 1) / w - 0.5),
                             abs(top / h - 0.5), abs((bottom + 1) / h - 0.5)) * 2.0
+        # The product's bounding box, normalised within this 4:5 working region
+        # (x, y, w, h in 0..1). Additive output for the app to outline; it does
+        # not affect any score or decision. Same measurement the check already
+        # made, so no new criterion is introduced.
+        def _c(v):
+            return max(0.0, min(1.0, float(v)))
+        info["box"] = [
+            _c(left / w), _c(top / h),
+            _c((right - left + 1) / w), _c((bottom - top + 1) / h),
+        ]
 
     # Cut off. A small margin avoids flagging a product that merely sits close
     # to the edge without crossing it.
@@ -443,10 +458,15 @@ def _framing_check(img, T, min_area: float = None, max_area: float = None,
         return 0.10, "Part of the product is cut off. Move back a little."
 
     if area < min_area:
-        return 0.15, "Move closer. The product is too small in the frame."
+        # Say the measured fill and the aim, using the numbers already computed;
+        # no new threshold. e.g. "Move closer. The product fills 12% of the
+        # frame. Fill the box."
+        return 0.15, (f"Move closer. The product fills {round(area * 100)}% of "
+                      f"the frame. Fill the box.")
 
     if area > max_area:
-        return 0.25, "Move back slightly. Leave a little space around the product."
+        return 0.25, (f"Move back slightly. The product fills {round(area * 100)}% "
+                      f"of the frame. Leave a little space around it.")
 
     # Off centre, measured from the centroid of the product region as a
     # fraction of half the frame.
@@ -665,6 +685,7 @@ def guidance(file: UploadFile = File(...),
         elapsed_ms=int((time.time() - t0) * 1000),
         exposure_hint=exposure_hint,
         zoom_hint=zoom_hint,
+        product_box=framing_info.get("box"),
     )
 
 

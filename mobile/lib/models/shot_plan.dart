@@ -73,8 +73,8 @@ class ShotPlan {
     ),
     ShotStep(
       label: 'Detail',
-      instruction: 'Move closer and fill the frame with the most important detail, '
-          'such as a label, a clasp, or the texture.',
+      instruction: 'Fill the frame with one feature, close up - not the whole '
+          'product or its card.',
       why: 'Close detail is what convinces someone the quality is real.',
       intendedRole: 'detail_shot',
     ),

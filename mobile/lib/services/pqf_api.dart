@@ -68,6 +68,11 @@ class GuidanceResult {
   /// product reaches its target size. 1.0 means leave the zoom as it is.
   final double zoomHint;
 
+  /// The detected product's bounding box, normalised [x, y, w, h] within the
+  /// scored 4:5 region, or null when none was measured (2026-10-13). Display
+  /// only: the preview outlines it. It affects no score or decision.
+  final List<double>? productBox;
+
   GuidanceResult({
     required this.ready,
     required this.checks,
@@ -75,6 +80,7 @@ class GuidanceResult {
     required this.elapsedMs,
     this.exposureHint = 0,
     this.zoomHint = 1.0,
+    this.productBox,
   });
 
   factory GuidanceResult.fromJson(Map<String, dynamic> j) => GuidanceResult(
@@ -86,6 +92,9 @@ class GuidanceResult {
         elapsedMs: j['elapsed_ms'] as int,
         exposureHint: (j['exposure_hint'] as num?)?.toInt() ?? 0,
         zoomHint: (j['zoom_hint'] as num?)?.toDouble() ?? 1.0,
+        productBox: (j['product_box'] as List?)
+            ?.map((v) => (v as num).toDouble())
+            .toList(),
       );
 
   /// The order fixes are asked for (v1.1.0): framing first (where the product

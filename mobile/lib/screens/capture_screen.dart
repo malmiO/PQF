@@ -168,6 +168,29 @@ class _CaptureScreenState extends State<CaptureScreen>
   /// covered the very product the user was trying to frame.
   bool _showBriefing = true;
 
+  // --- Help (guided only, 2026-10-13) ---------------------------------------
+  // Additive guidance help. None of this changes a score, a pass/fail, the
+  // auto-capture rule, zoom or selection; the shutter is never disabled.
+
+  /// When the current shot began live checking, for the 20 s help timer.
+  DateTime _shotStartedAt = DateTime.now();
+  static const Duration helpAfter = Duration(seconds: 20);
+  Timer? _helpTimer;
+
+  /// The "still not passing" help card is showing.
+  bool _showHelpCard = false;
+
+  /// Once the help card is dismissed or acted on, do not reshow it this shot.
+  bool _helpResolvedThisShot = false;
+
+  /// Retakes (an undo of a captured shot) counted per intended role.
+  final Map<String, int> _retakes = {};
+
+  /// Roles whose setup card has already shown, so it appears once per role.
+  final Set<String> _setupShownRoles = {};
+  bool _showSetupCard = false;
+  String? _setupCardRole;
+
   @override
   void initState() {
     super.initState();
@@ -175,6 +198,71 @@ class _CaptureScreenState extends State<CaptureScreen>
     _showBriefing = _guided;
     _autoCapture = _guided;
     _startCamera();
+    // The 20 s "still not passing" help card (guided only).
+    if (_guided) {
+      _helpTimer =
+          Timer.periodic(const Duration(seconds: 1), (_) => _maybeShowHelp());
+    }
+  }
+
+  /// Resets the per-shot help state when a new shot begins.
+  void _resetShotHelp() {
+    _shotStartedAt = DateTime.now();
+    _helpResolvedThisShot = false;
+    _showHelpCard = false;
+  }
+
+  /// Shows the help card once a guided shot has not passed for [helpAfter].
+  void _maybeShowHelp() {
+    if (!mounted || !_guided) return;
+    if (_showBriefing || _showSetupCard || _showHelpCard) return;
+    if (_scoring || _capturing || _helpResolvedThisShot) return;
+    if (_guidance.ready) return; // passing now: nothing to help with
+    if (DateTime.now().difference(_shotStartedAt) < helpAfter) return;
+    setState(() => _showHelpCard = true);
+    StudyLog.log('help_card_shown', {
+      'role': _stepAt(_step).intendedRole,
+      'seconds': DateTime.now().difference(_shotStartedAt).inSeconds,
+    });
+  }
+
+  /// The label of the highest-priority failing check, for the help card.
+  String? _primaryFailingLabel() {
+    final failing = {
+      for (final c in _guidance.checks)
+        if (c.passed == false) c.name: c
+    };
+    for (final name in GuidanceResult.instructionOrder) {
+      if (failing.containsKey(name)) return failing[name]!.label;
+    }
+    return failing.isEmpty ? null : failing.values.first.label;
+  }
+
+  /// Counts a retake of [role] and, on the 3rd for that role, shows the setup
+  /// card once.
+  void _registerRetake(String role) {
+    final n = (_retakes[role] ?? 0) + 1;
+    _retakes[role] = n;
+    if (n >= 3 && !_setupShownRoles.contains(role)) {
+      _setupShownRoles.add(role);
+      setState(() {
+        _showSetupCard = true;
+        _setupCardRole = role;
+      });
+      StudyLog.log('setup_check_shown', {'role': role, 'retakes': n});
+    }
+  }
+
+  /// "Start this product again": keeps every saved photo (nothing deleted), and
+  /// in study mode logs a restart event with the time, then returns home.
+  Future<void> _startProductAgain() async {
+    StudyLog.log('restart',
+        {'role': _setupCardRole, 'photos_kept': _captured.length});
+    setState(() => _showSetupCard = false);
+    try {
+      await _controller?.stopImageStream();
+    } catch (_) {}
+    if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
   Future<void> _startCamera() async {
@@ -564,6 +652,7 @@ class _CaptureScreenState extends State<CaptureScreen>
             _showBriefing = _guided;
             _stableFrames = 0;
             _guidance = GuidanceResult.empty();
+            _resetShotHelp();
           }
         });
         // Each shot starts from neutral exposure; the next grey background will
@@ -682,11 +771,15 @@ class _CaptureScreenState extends State<CaptureScreen>
 
   void _undo() {
     if (_captured.isEmpty) return;
+    // An undo is the user's intent to retake this role; counted for the setup
+    // card. The role of the photo being removed is the step at its index.
+    final role = _stepAt(_captured.length - 1).intendedRole;
     setState(() {
       _captured.removeLast();
       _step = _captured.length;
       _confirmation = null;
     });
+    if (_guided) _registerRetake(role);
   }
 
   @override
@@ -704,6 +797,7 @@ class _CaptureScreenState extends State<CaptureScreen>
   void dispose() {
     _watchdog?.cancel();
     _confirmationTimer?.cancel();
+    _helpTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
     super.dispose();
@@ -785,6 +879,8 @@ class _CaptureScreenState extends State<CaptureScreen>
             waiting: _checkInFlight,
             shotType: step.shotType,
             neutral: !_guided,
+            // Guided only: outline the detected product box over the preview.
+            productBox: _guided ? _guidance.productBox : null,
           ),
           SafeArea(
             child: Column(
@@ -873,8 +969,33 @@ class _CaptureScreenState extends State<CaptureScreen>
               onReady: () => setState(() {
                 _showBriefing = false;
                 _stableFrames = 0;
+                _resetShotHelp();
               }),
               onFinish: _finish,
+            ),
+
+          // Guided help cards (2026-10-13). Dismissible; the shutter stays live.
+          if (_showHelpCard && _guided)
+            _HelpCard(
+              checkLabel: _primaryFailingLabel(),
+              fix: _guidance.primaryInstruction ??
+                  'Adjust the shot and try again.',
+              onTakeAnyway: () {
+                setState(() {
+                  _showHelpCard = false;
+                  _helpResolvedThisShot = true;
+                });
+                _capture();
+              },
+              onDismiss: () => setState(() {
+                _showHelpCard = false;
+                _helpResolvedThisShot = true;
+              }),
+            ),
+          if (_showSetupCard && _guided)
+            _SetupCard(
+              onContinue: () => setState(() => _showSetupCard = false),
+              onStartAgain: _startProductAgain,
             ),
 
           if (_scoring)
@@ -1484,6 +1605,164 @@ class _Shutter extends StatelessWidget {
               ),
             ),
           ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown when a guided shot has not passed for 20 seconds. Names the main
+/// failing check, gives one plain fix, and lets the user take the photo anyway.
+/// The shutter is never disabled; this is help, not a block.
+class _HelpCard extends StatelessWidget {
+  final String? checkLabel;
+  final String fix;
+  final VoidCallback onTakeAnyway;
+  final VoidCallback onDismiss;
+
+  const _HelpCard({
+    required this.checkLabel,
+    required this.fix,
+    required this.onTakeAnyway,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: 20,
+      right: 20,
+      bottom: 150,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF12161C).withValues(alpha: 0.96),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white24),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(Icons.lightbulb_outline,
+                    color: Colors.amber.shade300, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    checkLabel == null
+                        ? 'Still working on this shot'
+                        : 'Still working on: $checkLabel',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w700),
+                  ),
+                ),
+                Semantics(
+                  button: true,
+                  label: 'Dismiss',
+                  excludeSemantics: true,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onDismiss,
+                    child: const SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: Icon(Icons.close, color: Colors.white70, size: 20),
+                    ),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 6),
+              Text(fix,
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 14.5, height: 1.35)),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                  onPressed: onTakeAnyway,
+                  child: const Text('Take it anyway'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown after the 3rd retake of the same shot role: a short setup checklist
+/// and a choice to continue or start this product again (nothing is deleted).
+class _SetupCard extends StatelessWidget {
+  final VoidCallback onContinue;
+  final VoidCallback onStartAgain;
+
+  const _SetupCard({required this.onContinue, required this.onStartAgain});
+
+  static const _items = <(IconData, String)>[
+    (Icons.wb_incandescent_outlined, 'Lamp on, or near a bright window'),
+    (Icons.stay_current_portrait_outlined, 'Phone steady on the stand'),
+    (Icons.auto_awesome_outlined, 'Lens wiped clean'),
+    (Icons.center_focus_strong_outlined,
+        'Product in the middle of the white box'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: Material(
+        color: const Color(0xFF12161C).withValues(alpha: 0.96),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(26, 24, 26, 26),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text("Let's check your setup",
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                const Text(
+                    'A few retakes usually means the setup needs a small fix. '
+                    'Check these, then carry on.',
+                    style: TextStyle(color: Colors.white70, fontSize: 15, height: 1.4)),
+                const SizedBox(height: 22),
+                for (final (icon, text) in _items)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: Row(children: [
+                      Icon(icon, color: Colors.amber.shade300, size: 24),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(text,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 16, height: 1.35)),
+                      ),
+                    ]),
+                  ),
+                const Spacer(),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(52)),
+                  onPressed: onContinue,
+                  child: const Text('Check setup and continue'),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: onStartAgain,
+                  child: Text('Start this product again',
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.85))),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
