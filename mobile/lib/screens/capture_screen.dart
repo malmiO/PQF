@@ -191,6 +191,14 @@ class _CaptureScreenState extends State<CaptureScreen>
   bool _showSetupCard = false;
   String? _setupCardRole;
 
+  /// Study logging: the hash of the last UNDONE photo per slot, so the next
+  /// capture of that slot records retake_of (study mode only).
+  final Map<String, String> _undoneHashBySlot = {};
+
+  /// The shot slot name used in the study log: main | angle1 | angle2 | detail
+  /// | extra (from the step label).
+  String _slotName(ShotStep s) => s.label.toLowerCase().replaceAll(' ', '');
+
   @override
   void initState() {
     super.initState();
@@ -633,6 +641,22 @@ class _CaptureScreenState extends State<CaptureScreen>
       // A no-op outside study mode; never throws.
       unawaited(StudyData.savePhoto(bytes));
 
+      // Study logging: a photo_captured event the moment it is saved (item 1).
+      if (StudySession.current != null) {
+        final slot = _slotName(_stepAt(_captured.length));
+        final meta = StudyLog.imageMeta(bytes);
+        final retakeOf = _undoneHashBySlot.remove(slot);
+        unawaited(StudyLog.photoCaptured(
+          bytes: bytes,
+          shotRequested: slot,
+          retakeOf: retakeOf,
+          source: 'in_app',
+          width: meta.width,
+          height: meta.height,
+          exifOrientation: meta.exif,
+        ));
+      }
+
       setState(() {
         _captured.add(bytes);
         _step = _captured.length;
@@ -773,7 +797,13 @@ class _CaptureScreenState extends State<CaptureScreen>
     if (_captured.isEmpty) return;
     // An undo is the user's intent to retake this role; counted for the setup
     // card. The role of the photo being removed is the step at its index.
-    final role = _stepAt(_captured.length - 1).intendedRole;
+    final step = _stepAt(_captured.length - 1);
+    final role = step.intendedRole;
+    // Remember the undone photo's hash so the next capture of this slot records
+    // retake_of (study mode only).
+    if (StudySession.current != null) {
+      _undoneHashBySlot[_slotName(step)] = StudyLog.photoHash(_captured.last);
+    }
     setState(() {
       _captured.removeLast();
       _step = _captured.length;

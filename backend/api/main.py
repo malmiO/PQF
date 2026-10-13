@@ -526,12 +526,14 @@ def health():
         _music_tracks, _test_tones = {m: 0 for m in _A.MOODS}, False
     from ..pqf import RELEASE as _RELEASE
     from ..pqf.semantic import evaluator as _ev
+    from ..pqf.semantic import score_cache as _sc
     return {
         "status": "ok",
         "framework_version": getattr(config, "SPEC_VERSION", "1.3"),
         "release": _RELEASE,
         "semantic_model": getattr(config, "GEMINI_MODEL", "unknown"),
         "last_model_version": _ev.LAST_MODEL_VERSION,
+        "score_cache": _sc.stats(),
         "tier": getattr(config, "GEMINI_TIER", ""),
         "semantic_mode": _semantic_mode(),
         "metrics": __import__("backend.pqf.technical", fromlist=["metric_status"]).metric_status(),

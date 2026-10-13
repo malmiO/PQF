@@ -116,9 +116,12 @@ def _gemini_evaluate(image_bytes: bytes, mime: str = "image/jpeg") -> SemanticRe
             error="google-genai not installed (pip install google-genai)",
         )
 
-    try:
-        client = genai.Client(api_key=api_key)
-        resp = client.models.generate_content(
+    from . import gemini_common as gc
+
+    def _do_call():
+        # A fresh client per attempt, carrying the explicit per-call timeout.
+        client = genai.Client(http_options=gc.http_options(types), api_key=api_key)
+        return client.models.generate_content(
             model=config.GEMINI_MODEL,
             contents=[
                 build_prompt(),
@@ -128,6 +131,9 @@ def _gemini_evaluate(image_bytes: bytes, mime: str = "image/jpeg") -> SemanticRe
                 temperature=config.GEMINI_TEMPERATURE,
             ),
         )
+
+    try:
+        resp = gc.call_with_retry(_do_call, label="evaluate")
         result = _parse_response(resp.text)
         # The version that answered; fall back to the configured name.
         result.model_version = str(getattr(resp, "model_version", None) or config.GEMINI_MODEL)
@@ -136,17 +142,39 @@ def _gemini_evaluate(image_bytes: bytes, mime: str = "image/jpeg") -> SemanticRe
             LAST_MODEL_VERSION = result.model_version
         return result
     except Exception as e:  # network / quota / safety / model-not-found etc.
-        return SemanticResult(ok=False, error=f"gemini call failed: {e}")
+        # Keep the reason code in the error so the API/study log can classify it.
+        # A failed call is NOT cached (there is no semantic cache).
+        return SemanticResult(ok=False,
+                              error=f"gemini call failed [{gc.reason(str(e))}]: {e}")
 
 
 def evaluate_semantic(image_bytes: bytes, mime: str = "image/jpeg") -> SemanticResult:
     """Evaluate one image's semantic quality. Uses mock mode if PQF_SEMANTIC_MOCK=1
-    or if no API key is present (so nothing crashes in a keyless environment)."""
+    or if no API key is present (so nothing crashes in a keyless environment).
+
+    A deterministic score cache (score_cache) keyed on (sha256 of these exact
+    image bytes, prompt version, model id) means a repeat of an identical image
+    returns the identical result and makes NO new Gemini call (2026-10-14).
+    Failed calls are never cached; mock mode is not cached (already deterministic)."""
+    global LAST_MODEL_VERSION
     if os.environ.get("PQF_SEMANTIC_MOCK") == "1":
-        global LAST_MODEL_VERSION
         LAST_MODEL_VERSION = "mock"
         return _mock_evaluate(image_bytes)
     if not os.environ.get("GEMINI_API_KEY"):
         # NO silent fallback (2026-10-01). Mock is opt in via PQF_SEMANTIC_MOCK=1.
         return SemanticResult(ok=False, error="GEMINI_API_KEY not set")
-    return _gemini_evaluate(image_bytes, mime)
+
+    from . import score_cache as _sc
+    from dataclasses import asdict
+    key = _sc.key_for(image_bytes, config.PROMPT_VERSION, config.GEMINI_MODEL)
+    cached = _sc.get(key)
+    if cached is not None:
+        result = SemanticResult(**cached)
+        if result.model_version:
+            LAST_MODEL_VERSION = result.model_version
+        return result
+
+    result = _gemini_evaluate(image_bytes, mime)
+    if result.ok:  # only successful results are cached
+        _sc.put(key, asdict(result))
+    return result

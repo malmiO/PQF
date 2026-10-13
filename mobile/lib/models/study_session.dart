@@ -4,8 +4,14 @@ class StudySession {
   static const guided = 'GUIDED';
   static const unguided = 'UNGUIDED';
 
+  static const seller = 'seller';
+  static const nonExpert = 'non_expert';
+
   final String participant;
   final String product;
+
+  /// Participant group: seller | non_expert (recorded at session start).
+  final String group;
 
   /// 1 or 2: which of the participant's two sessions this is.
   final int session;
@@ -13,12 +19,21 @@ class StudySession {
   DateTime? captureEndAt;
   DateTime? videoReadyAt;
 
+  /// Session 2 only: whether this is the SAME physical product as the first
+  /// condition (asked at session start; null for session 1).
+  bool? sameProductAsFirst;
+
   StudySession({
     required this.participant,
     required this.product,
     required this.session,
+    this.group = seller,
+    this.sameProductAsFirst,
     DateTime? startedAt,
   }) : startedAt = startedAt ?? DateTime.now().toUtc();
+
+  /// The counterbalanced condition order for this participant, e.g. [UNGUIDED, GUIDED].
+  List<String> get conditionOrder => abbaOrder(participant);
 
   /// The session running now, or null outside study mode.
   static StudySession? current;

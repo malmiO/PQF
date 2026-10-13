@@ -73,19 +73,23 @@ class ApiConfig {
   static Duration get guidanceTimeout =>
       Duration(milliseconds: _int('PQF_GUIDANCE_TIMEOUT_MS', 4000, 1000, 15000));
 
-  /// Batch scoring calls the semantic model once per image, so allow plenty.
+  /// Batch scoring calls the semantic model once per image. Measured free-tier
+  /// Gemini latency is ~50-100 s/call; with server-side concurrency a set of
+  /// several photos still takes minutes, so the default is raised well above
+  /// the measured p95 (2026-10-13). The app never auto-resubmits on timeout.
   static Duration get batchTimeout =>
-      Duration(milliseconds: _int('PQF_BATCH_TIMEOUT_MS', 180000, 30000, 600000));
+      Duration(milliseconds: _int('PQF_BATCH_TIMEOUT_MS', 300000, 30000, 600000));
 
-  /// Video assembly runs ffmpeg on the server, which takes several seconds per
-  /// image. At least 120 seconds, so a larger set does not time out.
+  /// Video assembly runs ffmpeg on the server. Raised above the measured p95
+  /// render time plus margin (2026-10-13).
   static Duration get videoTimeout =>
-      Duration(milliseconds: _int('PQF_VIDEO_TIMEOUT_MS', 180000, 120000, 600000));
+      Duration(milliseconds: _int('PQF_VIDEO_TIMEOUT_MS', 300000, 120000, 600000));
 
-  /// POST /video/plan uploads the set and asks the model once where the
-  /// features are, so allow up to a minute.
+  /// POST /video/plan asks the model once where the features are (a slow
+  /// free-tier call), now non-fatal server-side. Allow for the measured
+  /// per-call latency plus margin (2026-10-13).
   static Duration get videoPlanTimeout =>
-      Duration(milliseconds: _int('PQF_VIDEO_PLAN_TIMEOUT_MS', 60000, 30000, 300000));
+      Duration(milliseconds: _int('PQF_VIDEO_PLAN_TIMEOUT_MS', 180000, 30000, 300000));
 
   /// The 4 digit PIN that opens study mode (PQF_STUDY_PIN). Null, or anything
   /// that is not 4 digits, means study mode cannot be opened.

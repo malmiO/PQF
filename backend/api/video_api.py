@@ -188,10 +188,31 @@ def video_plan(
                     next((i for r, i in images if r == "hero_shot"), 0))
     data = datas[feat_idx]
     mime = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg"
-    located = locate_features(data, info.features, mime) if info.features else None
+    # The feature-location step is an AI (Gemini) call, so it is the plan step
+    # most likely to be slow or to fail. It is now NON-FATAL (B4, 2026-10-13):
+    # on failure the plan is built WITHOUT located callouts (features fall back
+    # to plain captions), with a logged note. The video is never lost over it.
+    _t_locate = time.perf_counter()
+    located = None
+    feature_note = ""
+    if info.features:
+        try:
+            located = locate_features(data, info.features, mime)
+        except Exception as e:  # noqa: BLE001
+            from ..pqf.semantic import gemini_common as gc
+            feature_note = f"feature_location_failed [{gc.reason(str(e))}]"
+            logging.getLogger("pqf.video").warning(
+                "locate_features failed, falling back to captions: %s", feature_note)
+            located = None
+    _locate_ms = round((time.perf_counter() - _t_locate) * 1000)
     located, guard = _guard_callouts(data, info.features, located, format)
 
     plan = build_plan(images, info, format, located, _music(info.mood, info.category))
+    if feature_note:
+        plan["feature_location_note"] = feature_note
+    logging.getLogger("pqf.video").info(
+        "plan timing: locate_features=%dms (features=%d, images=%d, note=%s)",
+        _locate_ms, len(info.features), len(files), feature_note or "ok")
     plan["callout_guard"] = guard
     plan["brand_colour"] = brand_colour if HEX.match(brand_colour or "") else DEFAULT_BRAND
     plan["plan_id"] = plan_id
@@ -226,19 +247,24 @@ def video_render(plan_id: str = Form(...), brand_colour: str = Form("")):
         raise HTTPException(404, "The planned music track is no longer installed.")
 
     out = d / "promo_video.mp4"
+    _t_render = time.perf_counter()
     try:
         r = render_plan(plan, paths, out, audio_path=audio_path,
                         brand_colour=brand_colour if HEX.match(brand_colour or "")
                         else plan.get("brand_colour", DEFAULT_BRAND), ffmpeg_bin=ff)
     except RuntimeError as e:
         raise HTTPException(500, str(e))
+    _render_ms = round((time.perf_counter() - _t_render) * 1000)
     # Step 4 (v1.1.0): the checklist is MEASURED from the finished file and saved
     # with the plan; the app reads it with GET /video/plan/{plan_id}.
+    _measure_ms = 0
     if r.record:
         from ..video.measure import checklist as measured_checklist, measure_video
         plan["render"] = r.record
         try:
+            _t_measure = time.perf_counter()
             m = measure_video(r.path, r.record, ff)
+            _measure_ms = round((time.perf_counter() - _t_measure) * 1000)
             plan["render"]["measurement"] = m
             plan["checklist"] = measured_checklist(plan, r.record, m)
             plan["checklist_source"] = "measured"
@@ -246,6 +272,13 @@ def video_render(plan_id: str = Form(...), brand_colour: str = Form("")):
             plan["checklist_source"] = f"declared (measurement failed: {str(e)[:120]})"
         (d / "plan.json").write_text(json.dumps(plan, indent=1), encoding="utf-8")
     met = sum(1 for c in plan.get("checklist", []) if c.get("met"))
+    # Additive timing summary for this render (server log + response headers).
+    _tm = (r.record or {}).get("timing", {})
+    logging.getLogger("pqf.video").info(
+        "render request timing: render_plan=%dms (frame_gen=%dms encode=%dms) "
+        "measure=%dms plan_id=%s",
+        _render_ms, _tm.get("frame_gen_ms", 0), _tm.get("encode_ms", 0),
+        _measure_ms, plan_id)
     return FileResponse(
         path=str(r.path), media_type="video/mp4", filename="promo_video.mp4",
         headers={"X-Video-Duration": str(r.duration_seconds),
@@ -255,4 +288,10 @@ def video_render(plan_id: str = Form(...), brand_colour: str = Form("")):
                  "X-Video-Mood": r.mood,
                  "X-Video-Checklist": f"{met}/{len(plan.get('checklist', []))}",
                  "X-Video-Checklist-Source": plan.get("checklist_source", "declared")[:40],
+                 # Additive timing (ms), so the phone/client can see where the
+                 # time went without server-log access. Display only.
+                 "X-Video-Render-Ms": str(_render_ms),
+                 "X-Video-Frame-Gen-Ms": str(_tm.get("frame_gen_ms", 0)),
+                 "X-Video-Encode-Ms": str(_tm.get("encode_ms", 0)),
+                 "X-Video-Measure-Ms": str(_measure_ms),
                  "X-Plan-Id": plan_id})

@@ -53,12 +53,19 @@ def _call_model(image_bytes: bytes, mime: str, prompt: str) -> str:
     try:                                         # current SDK (google-genai)
         from google import genai
         from google.genai import types
-        client = genai.Client(api_key=key)
-        resp = client.models.generate_content(
-            model=_model_name(),
-            contents=[types.Part.from_bytes(data=image_bytes, mime_type=mime), prompt],
-            config=types.GenerateContentConfig(temperature=0,
-                                               response_mime_type="application/json"))
+        from ..pqf.semantic import gemini_common as gc
+
+        def _do_call():
+            # Fresh client per attempt with the explicit per-call timeout.
+            client = genai.Client(http_options=gc.http_options(types), api_key=key)
+            return client.models.generate_content(
+                model=_model_name(),
+                contents=[types.Part.from_bytes(data=image_bytes, mime_type=mime),
+                          prompt],
+                config=types.GenerateContentConfig(
+                    temperature=0, response_mime_type="application/json"))
+
+        resp = gc.call_with_retry(_do_call, label="features")
         return resp.text
     except ImportError:                          # older SDK, kept for safety
         import google.generativeai as old
