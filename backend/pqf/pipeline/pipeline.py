@@ -261,13 +261,33 @@ def process_batch(images: list) -> BatchResult:
     `images` may be a list of (image_bytes, path) tuples, or a list of already
     scored ImageDecision objects for testing.
     """
-    decisions = []
-    for item in images:
+    # Score images with bounded concurrency (B3, 2026-10-13). Each image is
+    # scored independently, so this changes only wall-clock time, never the
+    # per-image scores. Order is preserved (results written back by position),
+    # which the selection and the app's `index` rely on. Pre-scored
+    # ImageDecision items (tests) pass straight through.
+    import os as _os
+    from concurrent.futures import ThreadPoolExecutor
+
+    conc = max(1, int(_os.environ.get("PQF_BATCH_CONCURRENCY", "3")))
+    decisions = [None] * len(images)
+    to_score = []
+    for i, item in enumerate(images):
         if isinstance(item, ImageDecision):
-            decisions.append(item)
+            decisions[i] = item
         else:
             image_bytes, path = item
-            decisions.append(score_image(image_bytes, path))
+            to_score.append((i, image_bytes, path))
+
+    if to_score and conc > 1 and len(to_score) > 1:
+        with ThreadPoolExecutor(max_workers=conc) as ex:
+            scored = list(ex.map(
+                lambda t: (t[0], score_image(t[1], t[2])), to_score))
+        for i, d in scored:
+            decisions[i] = d
+    else:
+        for i, b, p in to_score:
+            decisions[i] = score_image(b, p)
 
     passing = [d for d in decisions if d.passed]
     selected = _select_best_set(passing)

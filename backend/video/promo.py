@@ -22,9 +22,11 @@ Text is English only; Sinhala needs complex script shaping and is future work.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -595,6 +597,7 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
                 audio_path: Path | None = None, brand_colour: str = "#1F3A63",
                 ffmpeg_bin: str = "ffmpeg") -> PromoResult:
     """Render a plan from plan.build_plan. image_paths[i] is the photo for index i."""
+    _t_start = time.perf_counter()  # for additive timing logs (no effect on output)
     fmt = plan.get("format", "vertical")
     fmt = fmt if fmt in FORMATS else "vertical"
     W, H = FORMATS[fmt]
@@ -696,10 +699,16 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
             "-preset", "veryfast", "-crf", "20", "-threads", threads,
             "-movflags", "+faststart", str(out_path)]
 
+    _t_prep = time.perf_counter()  # preparation done; the frame loop starts now
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     err = ""
+    # Additive timing: time spent generating frames in Python vs. blocked writing
+    # them to ffmpeg's stdin (ffmpeg back-pressure, i.e. the encode). Logged only.
+    _gen_s = 0.0
+    _write_s = 0.0
     try:
         for f in range(n_frames):
+            _g0 = time.perf_counter()
             now = f / FPS
             active = [i for i, st in enumerate(starts) if st <= now < st + segs[i]["dur"]]
             if not active:
@@ -722,7 +731,11 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
             else:
                 (_, _, a), (_, lb, b) = frames[0], frames[-1]
                 out = _transition_frame(a, b, _ease(min(1.0, lb / tr)), style["transition"])
+            _g1 = time.perf_counter()
             proc.stdin.write(np.ascontiguousarray(out).tobytes())
+            _g2 = time.perf_counter()
+            _gen_s += _g1 - _g0
+            _write_s += _g2 - _g1
         proc.stdin.close()
         err = proc.stderr.read().decode(errors="ignore")
         proc.wait(timeout=300)
@@ -731,5 +744,26 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
         raise
     if proc.returncode != 0 or not Path(out_path).exists():
         raise RuntimeError(f"Video assembly failed. {err[-800:]}")
+
+    # Additive timing summary. prep = reading/normalising photos and building
+    # segments; frame_gen = Python per-frame compositing; encode = time blocked
+    # on ffmpeg's stdin (its encoding). None of this changes the output.
+    _now = time.perf_counter()
+    timing = {
+        "prep_ms": round((_t_prep - _t_start) * 1000),
+        "frame_gen_ms": round(_gen_s * 1000),
+        "encode_ms": round(_write_s * 1000),
+        "render_total_ms": round((_now - _t_start) * 1000),
+        "frames": n_frames,
+        "size": [W, H],
+        "fps": FPS,
+    }
+    record["timing"] = timing
+    logging.getLogger("pqf.video").info(
+        "render timing: total=%dms prep=%dms frame_gen=%dms encode=%dms "
+        "(%d frames @ %dx%d %dfps, %.1fms/frame)",
+        timing["render_total_ms"], timing["prep_ms"], timing["frame_gen_ms"],
+        timing["encode_ms"], n_frames, W, H, FPS,
+        timing["render_total_ms"] / max(1, n_frames))
     return PromoResult(Path(out_path), round(total, 1), len(cache), fmt,
                        audio_path is not None, mood, record)

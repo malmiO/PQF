@@ -59,12 +59,15 @@ class ApiFailure {
     this.technical,
   });
 
-  /// Whether offering a retry button makes sense. Retrying a quota failure
-  /// immediately just fails again, so it is not offered.
+  /// Whether offering a (user-tapped) retry button makes sense. This never
+  /// auto-resubmits; it only enables a manual "Try again". Busy/quota (429) are
+  /// included so the user can retry after waiting a minute (B5, 2026-10-13).
   bool get retryable =>
       kind == FailureKind.unreachable ||
       kind == FailureKind.timeout ||
-      kind == FailureKind.serverError;
+      kind == FailureKind.serverError ||
+      kind == FailureKind.rateLimited ||
+      kind == FailureKind.quotaExceeded;
 
   static ApiFailure unreachable(String? detail) => ApiFailure(
         kind: FailureKind.unreachable,
@@ -76,22 +79,22 @@ class ApiFailure {
 
   static ApiFailure timeout(String? detail) => ApiFailure(
         kind: FailureKind.timeout,
-        message: 'The service is taking longer than expected.',
-        action: 'This usually clears on its own. Try again in a moment.',
+        message: 'Server is taking longer than usual. Please wait and try again.',
+        action: 'Your photos are safe. Wait a moment, then try again.',
         technical: detail,
       );
 
   static ApiFailure quota(String? detail) => ApiFailure(
         kind: FailureKind.quotaExceeded,
-        message: 'The daily limit for photo checking has been reached.',
-        action: 'Your photos are safe. Checking will work again tomorrow.',
+        message: 'AI service is busy. Wait a minute and retry.',
+        action: 'Your photos are safe. Try again shortly.',
         technical: detail,
       );
 
   static ApiFailure server(int status, String? detail) => ApiFailure(
         kind: FailureKind.serverError,
-        message: 'The photo checking service reported a problem.',
-        action: 'Try again. If it keeps happening, restart the server.',
+        message: 'Server error, please retry.',
+        action: 'Try again. If it keeps happening, tell the person who set it up.',
         technical: 'HTTP $status. $detail',
       );
 
@@ -105,8 +108,8 @@ class ApiFailure {
 
   static ApiFailure rateLimited(String? detail, {String? serverDetail}) => ApiFailure(
         kind: FailureKind.rateLimited,
-        message: 'Too many checks from this network for now.',
-        action: serverDetail ?? 'Try again in a while. Your photos are safe.',
+        message: 'AI service is busy. Wait a minute and retry.',
+        action: serverDetail ?? 'Try again in a minute. Your photos are safe.',
         technical: detail,
       );
 
@@ -162,12 +165,12 @@ class ApiFailure {
       );
 
   /// A gateway timeout (502/504) or a client-side timeout while making the
-  /// video, usually a slow tunnel or connection rather than a server fault.
+  /// video. The server (AI + rendering) is slow; it is NOT the phone's
+  /// connection, so the wording never blames the signal (B1, 2026-10-13).
   static ApiFailure videoTimeout(String? detail) => ApiFailure(
         kind: FailureKind.timeout,
-        message: 'The connection timed out while making the video. '
-            'Try again on a stronger connection.',
-        action: 'Use Wi-Fi or a stronger signal, then try again.',
+        message: 'The video is taking longer than usual. Please wait and try again.',
+        action: 'Your photos are safe. Wait a moment, then try again.',
         technical: detail,
       );
 }

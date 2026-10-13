@@ -2,10 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as img;
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import '../app_info.dart';
 import '../models/study_session.dart';
 import 'pqf_api.dart';
 import 'study_data.dart';
@@ -62,6 +65,76 @@ class StudyLog {
       debugPrint('[study] POST /study/log failed: $e');
     }
   }
+
+  /// The phone's model, read once (Android). Empty if it cannot be read.
+  static String? _deviceModel;
+  static Future<String> _device() async {
+    if (_deviceModel != null) return _deviceModel!;
+    try {
+      if (Platform.isAndroid) {
+        final a = await DeviceInfoPlugin().androidInfo;
+        _deviceModel = '${a.manufacturer} ${a.model} (Android ${a.version.release}, '
+            'API ${a.version.sdkInt})';
+      } else {
+        _deviceModel = Platform.operatingSystem;
+      }
+    } catch (_) {
+      _deviceModel = '';
+    }
+    return _deviceModel!;
+  }
+
+  /// Session start: records the group, device, app build/version and the
+  /// counterbalanced condition order (and, for session 2, same-product y/n).
+  static Future<void> sessionStart(StudySession s) async {
+    return log('session_start', {
+      'group': s.group,
+      'device_model': await _device(),
+      'app_version': AppInfo.version,
+      'app_build': AppInfo.build,
+      'apk_version': '${AppInfo.version}+${AppInfo.build}',
+      'condition_order': s.conditionOrder,
+      if (s.session == 2 && s.sameProductAsFirst != null)
+        'same_product_as_first': s.sameProductAsFirst,
+    });
+  }
+
+  /// Pixel size and EXIF orientation of a JPEG, best-effort (null on failure).
+  static ({int? width, int? height, int? exif}) imageMeta(Uint8List bytes) {
+    try {
+      final d = img.decodeImage(bytes);
+      if (d == null) return (width: null, height: null, exif: null);
+      int? orient;
+      try {
+        orient = d.exif.imageIfd.hasOrientation ? d.exif.imageIfd.orientation : null;
+      } catch (_) {
+        orient = null;
+      }
+      return (width: d.width, height: d.height, exif: orient);
+    } catch (_) {
+      return (width: null, height: null, exif: null);
+    }
+  }
+
+  /// One photo saved: logged the moment it is written, with its provenance.
+  static Future<void> photoCaptured({
+    required Uint8List bytes,
+    required String shotRequested, // main | angle1 | angle2 | detail
+    String? retakeOf, // hash of the photo this one replaces, or null
+    required String source, // in_app | upload
+    int? width,
+    int? height,
+    int? exifOrientation,
+  }) =>
+      log('photo_captured', {
+        'hash': photoHash(bytes),
+        'shot_requested': shotRequested,
+        'retake_of': retakeOf,
+        'source': source,
+        'width': width,
+        'height': height,
+        'exif_orientation': exifOrientation,
+      });
 
   /// The participant's own picks: slot (main, angle1, angle2, detail) -> photo.
   static Future<void> ownPicks(Map<String, Uint8List> picks) =>

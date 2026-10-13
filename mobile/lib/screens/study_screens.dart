@@ -62,6 +62,10 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
   final _participant = TextEditingController(text: 'P');
   final _product = TextEditingController();
   int _session = 1;
+  String _group = StudySession.seller;
+
+  /// Session 2 only: is this the same physical product as the first condition?
+  bool? _sameProduct;
 
   // What study data is on this phone (photos and log), for the export card.
   ({int photos, int bytes, bool hasLog})? _data;
@@ -143,16 +147,19 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
 
   bool get _valid =>
       StudySession.participantPattern.hasMatch(_participant.text.trim()) &&
-      StudySession.productPattern.hasMatch(_product.text.trim());
+      StudySession.productPattern.hasMatch(_product.text.trim()) &&
+      (_session != 2 || _sameProduct != null);
 
   Future<void> _start() async {
     final s = StudySession(
       participant: _participant.text.trim(),
       product: _product.text.trim(),
       session: _session,
+      group: _group,
+      sameProductAsFirst: _session == 2 ? _sameProduct : null,
     );
     StudySession.current = s;
-    await StudyLog.log('session_start');
+    await StudyLog.sessionStart(s);
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const ProductFormScreen()));
@@ -204,6 +211,17 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
                 border: OutlineInputBorder()),
             onChanged: (_) => setState(() {}),
           ),
+          const SizedBox(height: 16),
+          const Text('Participant group', style: TextStyle(fontSize: 14)),
+          const SizedBox(height: 6),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: StudySession.seller, label: Text('Seller')),
+              ButtonSegment(value: StudySession.nonExpert, label: Text('Non-expert')),
+            ],
+            selected: {_group},
+            onSelectionChanged: (v) => setState(() => _group = v.first),
+          ),
           const SizedBox(height: 18),
           if (order != null) ...[
             Text('Order for $code: 1. ${order[0]}   2. ${order[1]}',
@@ -215,7 +233,26 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
                 ButtonSegment(value: 2, label: Text('Session 2: ${order[1]}')),
               ],
               selected: {_session},
-              onSelectionChanged: (v) => setState(() => _session = v.first),
+              onSelectionChanged: (v) => setState(() {
+                _session = v.first;
+                if (_session != 2) _sameProduct = null;
+              }),
+            ),
+          ],
+          if (_session == 2) ...[
+            const SizedBox(height: 14),
+            const Text('Same product as the first condition?',
+                style: TextStyle(fontSize: 15)),
+            const SizedBox(height: 6),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: true, label: Text('Yes')),
+                ButtonSegment(value: false, label: Text('No')),
+              ],
+              selected: _sameProduct == null ? <bool>{} : {_sameProduct!},
+              emptySelectionAllowed: true,
+              onSelectionChanged: (v) =>
+                  setState(() => _sameProduct = v.isEmpty ? null : v.first),
             ),
           ],
           const SizedBox(height: 24),
@@ -246,7 +283,7 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
             style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
             // Never while a session is running: that would delete its photos.
             onPressed: (_busy || active != null) ? null : _delete,
-            child: const Text('Delete study data from this phone'),
+            child: const Text('Clear study data'),
           ),
           if (active != null)
             const Padding(

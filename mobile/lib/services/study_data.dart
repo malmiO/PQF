@@ -110,12 +110,26 @@ class StudyData {
     }
     files.sort((a, b) => a.path.compareTo(b.path));
 
+    // Participant id(s) present on the phone, from the photo folders
+    // (<participant>_<condition>), so the zip name says whose data it is.
+    final participants = <String>{};
+    for (final f in files) {
+      final parent = Directory(f.parent.path).path.split(RegExp(r'[\\/]')).last;
+      final pid = parent.split('_').first;
+      if (pid.isNotEmpty) participants.add(pid);
+    }
+    final who = participants.isEmpty
+        ? 'unknown'
+        : (participants.length == 1
+            ? participants.first
+            : (participants.toList()..sort()).take(4).join('-'));
+
     await outDir.create(recursive: true);
     final t = (now ?? DateTime.now());
     String two(int v) => v.toString().padLeft(2, '0');
     final stamp = '${t.year}${two(t.month)}${two(t.day)}_'
         '${two(t.hour)}${two(t.minute)}${two(t.second)}';
-    final zip = File('${outDir.path}/pqf_study_$stamp.zip');
+    final zip = File('${outDir.path}/pqf_study_${who}_$stamp.zip');
 
     final enc = ZipFileEncoder()..create(zip.path);
     try {

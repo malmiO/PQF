@@ -6,11 +6,20 @@ offline, no network. Spec v1.2.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
+import threading
 import cv2
 import numpy as np
 
 from .. import config
 from ..preprocess import to_gray
+
+# BRISQUE (libsvm) and PIQE use native code that is NOT thread-safe: loading the
+# SVM model from more than one thread corrupts the heap (crash 0xc0000374).
+# When /batch scores images concurrently (bounded concurrency, 2026-10-13) these
+# native metrics are serialised with this lock. It changes no score - only one
+# thread runs the native metric at a time; the slow part (the Gemini network
+# call) still overlaps across threads.
+_NATIVE_METRIC_LOCK = threading.Lock()
 
 
 def _clip01(x: float) -> float:
@@ -211,7 +220,8 @@ def t4_brisque(img: np.ndarray) -> float:
     try:
         from brisque import BRISQUE
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        raw = BRISQUE().score(rgb)
+        with _NATIVE_METRIC_LOCK:  # libsvm model load is not thread-safe
+            raw = BRISQUE().score(rgb)
     except Exception as e:
         _warn_abstain("T4 BRISQUE", e)
         # If the library/model is unavailable, abstain neutrally (documented).
@@ -246,7 +256,8 @@ def t5_piqe(img: np.ndarray) -> float:
 
     try:
         gray = _to_gray(crop)
-        out = pypiqe.piqe(gray)
+        with _NATIVE_METRIC_LOCK:  # keep native metric calls single-threaded
+            out = pypiqe.piqe(gray)
         raw = out[0] if isinstance(out, tuple) else out
     except Exception as e:
         _warn_abstain("T5 PIQE", e)

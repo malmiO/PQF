@@ -76,6 +76,9 @@ dependencies:
   # SHA-256 of photo bytes for the study log (already a transitive dependency).
   crypto: ^3.0.6
 
+  # Device model for the study session_start record (study mode only).
+  device_info_plus: ^13.3.0
+
   # Zip for the researcher's "Export study data" (already a transitive dependency
   # of the image package; declared because the app now imports it directly).
   archive: ^4.0.0
