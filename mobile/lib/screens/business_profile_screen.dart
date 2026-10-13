@@ -76,7 +76,8 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
         title: const Text('My shop'),
         actions: const [HelpButton(HelpTopic.profile)],
       ),
-      body: _loading
+      body: SafeArea(
+        child: _loading
           ? const Center(child: CircularProgressIndicator())
           : Form(
               key: _formKey,
@@ -155,6 +156,7 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
                 ],
               ),
             ),
+      ),
     );
   }
 }

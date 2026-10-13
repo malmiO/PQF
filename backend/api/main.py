@@ -979,8 +979,26 @@ def video(
     )
 
 # Automatic marketing video: /video/plan, /video/render (2026-10-06).
-from .video_api import router as video_router  # noqa: E402
+from .video_api import router as video_router, start_session_sweeper  # noqa: E402
 app.include_router(video_router)
+
+# Background sweep: delete video sessions older than KEEP_HOURS (3) on a timer,
+# so the 3-hour deletion promise holds even with no new /video requests.
+_session_sweeper = None
+
+
+@app.on_event("startup")
+async def _start_session_sweeper():
+    global _session_sweeper
+    _session_sweeper = start_session_sweeper()
+
+
+@app.on_event("shutdown")
+async def _stop_session_sweeper():
+    global _session_sweeper
+    if _session_sweeper is not None:
+        _session_sweeper.cancel()
+        _session_sweeper = None
 
 # Study sessions for the evaluation: POST /study/log (v1.1.0).
 from .study_api import router as study_router  # noqa: E402

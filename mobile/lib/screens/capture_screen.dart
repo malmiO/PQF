@@ -12,6 +12,7 @@ import '../models/shot_plan.dart';
 import '../services/pqf_api.dart';
 import '../services/frame_converter.dart';
 import '../widgets/guidance_overlay.dart';
+import '../widgets/confirm_leave.dart';
 import '../widgets/error_view.dart';
 import '../widgets/help_sheet.dart';
 import '../models/study_session.dart';
@@ -753,7 +754,27 @@ class _CaptureScreenState extends State<CaptureScreen>
     final step = _stepAt(_step);
     final canFinish = done >= _required;
 
-    return Scaffold(
+    return PopScope(
+      // Only guard back when there are photos to lose; an empty session leaves
+      // freely so the gesture is not needlessly blocked.
+      canPop: _captured.isEmpty,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final leave = await confirmLeave(
+          context,
+          title: 'Leave the camera?',
+          message: 'You have taken ${_captured.length} '
+              'photo${_captured.length == 1 ? '' : 's'}. '
+              'They will be discarded if you leave now.',
+        );
+        if (leave && context.mounted) {
+          try {
+            await _controller?.stopImageStream();
+          } catch (_) {}
+          if (context.mounted) Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
@@ -878,6 +899,7 @@ class _CaptureScreenState extends State<CaptureScreen>
             ),
         ],
       ),
+    ),
     );
   }
 }

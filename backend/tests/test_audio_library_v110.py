@@ -77,16 +77,23 @@ def test_test_tones_are_reported(tmp_path):
 def test_caption_credits_cc_by_music_and_not_cc0():
     info = ProductInfo(name="Keychain", price="Rs. 450")
     by = post_kit(info, {"track_id": "calm_1", "licence": "CC-BY-4.0", "title": "Morning",
-                         "artist": "Ann", "source_url": "https://example.org/t/1"})
-    assert "Music: Morning by Ann, CC BY 4.0, https://example.org/t/1" in by["caption"]
+                         "artist": "Kevin MacLeod", "source_url": "https://incompetech.com"})
+    # CC BY 4.0: names the work and author, links the licence, and indicates the
+    # changes made (trimmed, faded, loudness-normalised).
+    assert ("Morning by Kevin MacLeod (incompetech.com), licensed under CC BY 4.0 "
+            "(https://creativecommons.org/licenses/by/4.0/). "
+            "Edited: trimmed, faded, loudness-normalised.") in by["caption"]
     assert by["music_credit"]
     cc0 = post_kit(info, {"track_id": "x", "licence": "CC0", "title": "T", "artist": "B",
                           "source_url": "u"})
-    assert "Music:" not in cc0["caption"] and cc0["music_credit"] == ""
+    assert "licensed under CC BY 4.0" not in cc0["caption"] and cc0["music_credit"] == ""
     plan = build_plan([("hero_shot", 0)], info, "vertical", None,
                       {"mood": "calm", "track_id": "calm_1", "licence": "CC-BY-4.0",
-                       "title": "Morning", "artist": "Ann", "source_url": "https://e/1"})
-    assert "Music: Morning by Ann" in plan["post"]["caption"]
+                       "title": "Morning", "artist": "Kevin MacLeod",
+                       "source_url": "https://incompetech.com"})
+    assert ("Morning by Kevin MacLeod (incompetech.com), licensed under CC BY 4.0"
+            in plan["post"]["caption"])
+    assert "Edited: trimmed, faded, loudness-normalised." in plan["post"]["caption"]
 
 
 def test_track_with_bpm_closest_to_the_mood_is_chosen(tmp_path, monkeypatch):

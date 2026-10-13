@@ -6,6 +6,7 @@ import '../models/study_session.dart';
 import '../services/study_log.dart';
 import '../services/pqf_api.dart';
 import '../widgets/breakdown_panel.dart';
+import '../widgets/confirm_leave.dart';
 import '../widgets/error_view.dart';
 import '../widgets/help_sheet.dart';
 import 'capture_screen.dart';
@@ -174,7 +175,19 @@ class _ResultsScreenState extends State<ResultsScreen> {
     final set = result.setPhotos;
     final notUsed = result.notUsed;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final leave = await confirmLeave(
+          context,
+          title: 'Leave your results?',
+          message: 'You will go back and these results will not be shown '
+              'again unless you check the photos once more.',
+        );
+        if (leave && context.mounted) Navigator.of(context).pop();
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Text(widget.draft.name),
         actions: [
@@ -185,7 +198,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
           ),
         ],
       ),
-      body: Stack(
+      body: SafeArea(
+        child: Stack(
         children: [
           ListView(
             padding: const EdgeInsets.all(18),
@@ -301,6 +315,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
             ),
         ],
       ),
+      ),
+    ),
     );
   }
 }

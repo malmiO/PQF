@@ -511,6 +511,19 @@ class RenderedVideo {
   });
 }
 
+/// A summary of the server from GET /health, for the About screen.
+class HealthInfo {
+  final String release;
+  final String frameworkVersion;
+
+  const HealthInfo({required this.release, required this.frameworkVersion});
+
+  factory HealthInfo.fromJson(Map<String, dynamic> j) => HealthInfo(
+        release: (j['release'] ?? '') as String,
+        frameworkVersion: (j['framework_version'] ?? '') as String,
+      );
+}
+
 /// Client for the PQF API.
 ///
 /// Every method returns an [ApiResult] rather than throwing, so a caller never
@@ -813,6 +826,23 @@ class PqfApi {
       ));
     } catch (e) {
       return ApiResult.failure(_videoThrown('POST /video/render', e));
+    }
+  }
+
+  /// The server's release and framework version (GET /health), for the About
+  /// screen. Open endpoint, so no token is needed.
+  Future<ApiResult<HealthInfo>> healthInfo() async {
+    try {
+      final r = await _client
+          .get(Uri.parse('${ApiConfig.baseUrl}/health'))
+          .timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) {
+        return ApiResult.failure(_fromResponse(r.statusCode, r.body));
+      }
+      return ApiResult.success(
+          HealthInfo.fromJson(jsonDecode(r.body) as Map<String, dynamic>));
+    } catch (e) {
+      return ApiResult.failure(_classify(e));
     }
   }
 
