@@ -28,8 +28,8 @@ def test_release_is_the_release_candidate_and_spec_version_is_unchanged():
     assert RELEASE == "1.4.0-rc"
     h = client.get("/health").json()
     assert h["release"] == "1.4.0-rc"
-    # The specification version is untouched by the release label.
-    assert h["framework_version"] == getattr(config, "SPEC_VERSION", "1.3") == "1.3"
+    # The framework version is set separately from the release label (2026-10-15: "1.4").
+    assert h["framework_version"] == config.SPEC_VERSION == "1.4"
     assert h["tier"] == "free"
 
 

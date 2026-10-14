@@ -9,6 +9,12 @@ STATUS: T0-T6 / TQS section CONFIRMED (spec v1.2, including T6 added 2026-08-13)
         from docs/PQF_Specification_v1.2.docx section on S1-S5 weights.
 """
 
+# The framework version /health reports as framework_version. Set to "1.4" on 2026-10-15
+# for the v1.4.0 evaluation build (the criteria, weights and thresholds of this file as
+# frozen for it). The specification document itself is still v1.3 plus the calibrated
+# T4/T5 values (decisions.md 2026-10-11). RELEASE (backend/pqf/__init__.py) is the build.
+SPEC_VERSION = "1.4"
+
 # ---------------------------------------------------------------------------
 # Pre-processing
 # ---------------------------------------------------------------------------
@@ -63,13 +69,19 @@ assert set(TQS_PASS_THRESHOLDS) == set(TQS_WEIGHTS), "every technical criterion 
 
 # ---------------------------------------------------------------------------
 # Per-criterion parameters
-# CALIBRATED_* are placeholders until Phase B calibration on the 52-image
-# calibration split (data/splits/split_v1.csv). Do not tune on holdout.
+# Calibration uses the 52-image calibration split only (data/splits/split_v1.csv);
+# never tune on the holdout.
+#   CALIBRATED_SHARPNESS_SMAX  data-derived: chosen by separation of good catalogue images
+#                              from constructed degraded captures (decisions.md 2026-09-11;
+#                              evidence research/results/calibration_sharpness.txt).
+#   CALIBRATED_COLORCAST_CMAX  NOT data-derived: the default floor 5.0 (the good images had
+#                              near-zero cast, so there was nothing to calibrate against;
+#                              decisions.md 2026-08-14, research/results/calibration_v1.txt).
 # ---------------------------------------------------------------------------
 
 # T1 — Sharpness (Laplacian variance). Resolution-dependent; only meaningful
 # at WORKING_LONGEST_SIDE. sharpness_norm = clip(var / S_MAX, 0, 1).
-CALIBRATED_SHARPNESS_SMAX = 1134.6   # placeholder → set in Phase B
+CALIBRATED_SHARPNESS_SMAX = 1134.6   # calibrated 2026-09-11, separation 91% (see above)
 
 # T2 — Exposure (mean luminance in [0,255]). Penalise distance from ideal band.
 T2_IDEAL_LOW = 100.0

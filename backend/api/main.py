@@ -529,7 +529,7 @@ def health():
     from ..pqf.semantic import score_cache as _sc
     return {
         "status": "ok",
-        "framework_version": getattr(config, "SPEC_VERSION", "1.3"),
+        "framework_version": getattr(config, "SPEC_VERSION", "1.4"),
         "release": _RELEASE,
         "semantic_model": getattr(config, "GEMINI_MODEL", "unknown"),
         "last_model_version": _ev.LAST_MODEL_VERSION,

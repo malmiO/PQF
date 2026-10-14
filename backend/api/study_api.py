@@ -23,7 +23,9 @@ from fastapi import APIRouter, HTTPException, Request
 router = APIRouter()
 _LOCK = threading.Lock()
 
-EVENTS = {"session_start", "capture_end", "own_picks", "batch_result", "video_ready"}
+EVENTS = {"session_start", "capture_end", "own_picks", "batch_result", "video_ready",
+          # v1.4.0 (2026-10-15): events the app logs in study mode
+          "photo_captured", "help_card_shown", "setup_check_shown", "restart"}
 CONDITIONS = {"GUIDED", "UNGUIDED"}
 PICK_SLOTS = {"main", "angle1", "angle2", "detail"}
 ROLES = {"hero_shot", "angle_shot", "detail_shot", "reject", ""}   # pipeline role values
@@ -37,7 +39,35 @@ MAX_BYTES = 64 * 1024
 
 ALLOWED = {"event", "timestamp", "participant", "condition", "product", "session",
            "photo_hashes", "own_picks", "framework_selection", "photos", "gate", "times",
-           "model_version", "tier"}
+           "model_version", "tier",
+           # v1.4.0 (2026-10-15): what the app sends, each only on its own event (EXTRA_BY_EVENT)
+           "group", "device_model", "app_version", "app_build", "apk_version",
+           "condition_order", "same_product_as_first",
+           "hash", "shot_requested", "retake_of", "source", "width", "height",
+           "exif_orientation", "role", "seconds", "retakes", "photos_kept"}
+
+# The new fields are accepted ONLY on the event that carries them. Anything else, and any
+# field not listed in ALLOWED at all, is refused (400), so the log stays codes and numbers.
+EXTRA_BY_EVENT = {
+    "session_start": {"group", "device_model", "app_version", "app_build", "apk_version",
+                      "condition_order", "same_product_as_first"},
+    "photo_captured": {"hash", "shot_requested", "retake_of", "source", "width", "height",
+                       "exif_orientation"},
+    "help_card_shown": {"role", "seconds"},
+    "setup_check_shown": {"role", "retakes"},
+    "restart": {"role", "photos_kept"},
+}
+GROUPS = {"seller", "non_expert"}
+SOURCES = {"in_app", "upload"}
+DEVICE_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._+-]{0,47}$")
+APP_VERSION = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}$")
+APP_BUILD = re.compile(r"^\d{1,6}$")
+APK_VERSION = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\+\d{1,6}$")
+# Belt and braces: nothing that looks like a key, token or credential is stored, whatever
+# field it arrives in (the field patterns above already make this very unlikely).
+SECRET_LIKE = re.compile(
+    r"(AIza[0-9A-Za-z_-]{16,}|sk-[A-Za-z0-9_-]{16,}|-----BEGIN|bearer\s|api[_-]?key|"
+    r"passw(or)?d|secret|token\s*[=:]|authorization)", re.IGNORECASE)
 
 # The model that answered a batch (v1.4.0-rc) and the API tier. Codes only: letters,
 # digits, dot, dash, underscore; model_version up to 64 characters, tier up to 16.
@@ -72,6 +102,92 @@ def _hash(v, name):
     return v
 
 
+EXTRA_BY_EVENT_ALL = set().union(*EXTRA_BY_EVENT.values())
+
+
+def _refuse_secret_like(value, path="entry"):
+    """Refuse any string anywhere in the entry that looks like a credential."""
+    if isinstance(value, str):
+        if SECRET_LIKE.search(value):
+            raise ValueError(f"{path} looks like a secret and was not stored")
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _refuse_secret_like(str(k), f"{path} key")
+            _refuse_secret_like(v, f"{path}.{k}")
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            _refuse_secret_like(v, f"{path}[{i}]")
+
+
+def _int(v, name, lo, hi, allow_none=False):
+    if v is None and allow_none:
+        return None
+    if isinstance(v, bool) or not isinstance(v, int) or not (lo <= v <= hi):
+        raise ValueError(f"{name} must be a whole number {lo}..{hi}")
+    return v
+
+
+def _validate_new_fields(entry: dict, out: dict) -> None:
+    """The fields the app added in v1.4.0, each checked against its own pattern."""
+    if "group" in entry:
+        if entry["group"] not in GROUPS:
+            raise ValueError(f"group must be one of {sorted(GROUPS)}")
+        out["group"] = entry["group"]
+    if "device_model" in entry:
+        v = entry["device_model"]
+        if v != "" and not (isinstance(v, str) and DEVICE_MODEL.match(v)):
+            raise ValueError("device_model must be a short model name")
+        out["device_model"] = v
+    for key, rx in (("app_version", APP_VERSION), ("app_build", APP_BUILD),
+                    ("apk_version", APK_VERSION)):
+        if key in entry:
+            v = entry[key]
+            if isinstance(v, int) and not isinstance(v, bool):
+                v = str(v)
+            if not (isinstance(v, str) and rx.match(v)):
+                raise ValueError(f"{key} has the wrong form")
+            out[key] = v
+    if "condition_order" in entry:
+        o = entry["condition_order"]
+        if not (isinstance(o, list) and len(o) == 2 and set(o) == CONDITIONS):
+            raise ValueError("condition_order is [GUIDED, UNGUIDED] in some order")
+        out["condition_order"] = list(o)
+    if "same_product_as_first" in entry:
+        if not isinstance(entry["same_product_as_first"], bool):
+            raise ValueError("same_product_as_first must be true or false")
+        out["same_product_as_first"] = entry["same_product_as_first"]
+    if "hash" in entry:
+        out["hash"] = _hash(entry["hash"], "hash")
+    if "shot_requested" in entry:
+        if entry["shot_requested"] not in PICK_SLOTS:
+            raise ValueError(f"shot_requested must be one of {sorted(PICK_SLOTS)}")
+        out["shot_requested"] = entry["shot_requested"]
+    if "retake_of" in entry:
+        out["retake_of"] = (None if entry["retake_of"] is None
+                            else _hash(entry["retake_of"], "retake_of"))
+    if "source" in entry:
+        if entry["source"] not in SOURCES:
+            raise ValueError(f"source must be one of {sorted(SOURCES)}")
+        out["source"] = entry["source"]
+    for key in ("width", "height"):
+        if key in entry:
+            out[key] = _int(entry[key], key, 1, 30000, allow_none=True)
+    if "exif_orientation" in entry:
+        out["exif_orientation"] = _int(entry["exif_orientation"], "exif_orientation", 0, 8,
+                                       allow_none=True)
+    if "role" in entry:
+        r = entry["role"]
+        if r is not None and r not in ROLES:
+            raise ValueError("role must be a pipeline role")
+        out["role"] = r
+    if "seconds" in entry:
+        out["seconds"] = _int(entry["seconds"], "seconds", 0, 86400)
+    if "retakes" in entry:
+        out["retakes"] = _int(entry["retakes"], "retakes", 0, 100)
+    if "photos_kept" in entry:
+        out["photos_kept"] = _int(entry["photos_kept"], "photos_kept", 0, 200)
+
+
 def validate(entry: dict) -> dict:
     """The entry with only allowed, well formed fields; ValueError otherwise."""
     if not isinstance(entry, dict):
@@ -83,6 +199,11 @@ def validate(entry: dict) -> dict:
     if entry.get("event") not in EVENTS:
         raise ValueError(f"event must be one of {sorted(EVENTS)}")
     out["event"] = entry["event"]
+    _refuse_secret_like(entry)
+    own = EXTRA_BY_EVENT.get(out["event"], set())
+    wrong = (EXTRA_BY_EVENT_ALL & set(entry)) - own
+    if wrong:
+        raise ValueError(f"{sorted(wrong)} not allowed on a {out['event']} entry")
     if not PARTICIPANT.match(str(entry.get("participant", ""))):
         raise ValueError("participant must be a code like P01")
     out["participant"] = entry["participant"]
@@ -138,6 +259,7 @@ def validate(entry: dict) -> dict:
                 any(v is not None and not STAMP.match(str(v)) for v in t.values()):
             raise ValueError(f"times keys are {sorted(TIME_KEYS)}, ISO 8601 values")
         out["times"] = dict(t)
+    _validate_new_fields(entry, out)
     for key, rx in (("model_version", MODEL_VERSION), ("tier", TIER)):
         if key in entry:
             if out["event"] != "batch_result":
