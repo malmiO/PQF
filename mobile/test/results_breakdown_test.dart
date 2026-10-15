@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/models/product_draft.dart';
+import 'package:mobile/models/study_session.dart';
 import 'package:mobile/screens/results_screen.dart';
 import 'package:mobile/services/pqf_api.dart';
 import 'package:mobile/widgets/breakdown_panel.dart';
@@ -172,5 +173,52 @@ void main() {
     expect(find.text('Continue to your video'), findsOneWidget);
     expect(find.text('Making your video next'), findsNothing);
     expect(find.byType(ResultsScreen), findsOneWidget);
+  });
+
+  testWidgets('study mode: no "Why this score" panel anywhere on the results screen',
+      (tester) async {
+    tester.view.physicalSize = const Size(1080, 2600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    StudySession.current =
+        StudySession(participant: 'P01', product: 'K1', session: 1);
+    addTearDown(() => StudySession.current = null);
+    final tiny = Uint8List.fromList(base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='));
+    await tester.pumpWidget(MaterialApp(
+      home: ResultsScreen(
+        draft: const ProductDraft(name: 'Pair of earrings'),
+        result: batch,
+        images: List.filled(4, tiny),
+      ),
+    ));
+    await tester.pump();
+    expect(find.byType(BreakdownPanel), findsNothing);
+    expect(find.text('Why this score'), findsNothing);
+    // the not-used cards are in a collapsed tile: open it and check again
+    await tester.tap(find.textContaining('Not used'));
+    await tester.pumpAndSettle();
+    expect(find.byType(BreakdownPanel), findsNothing);
+    expect(find.text('Why this score'), findsNothing);
+    // the photos and their reasons are still shown
+    expect(find.textContaining('Photo '), findsWidgets);
+  });
+
+  testWidgets('outside study mode the panel is shown again', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    StudySession.current = null;
+    final tiny = Uint8List.fromList(base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='));
+    await tester.pumpWidget(MaterialApp(
+      home: ResultsScreen(
+        draft: const ProductDraft(name: 'Pair of earrings'),
+        result: batch,
+        images: List.filled(4, tiny),
+      ),
+    ));
+    await tester.pump();
+    expect(find.byType(BreakdownPanel), findsWidgets);
   });
 }

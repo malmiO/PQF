@@ -12,6 +12,7 @@ import '../models/shot_plan.dart';
 import '../services/pqf_api.dart';
 import '../services/frame_converter.dart';
 import '../widgets/guidance_overlay.dart';
+import '../widgets/shot_card.dart';
 import '../widgets/confirm_leave.dart';
 import '../widgets/error_view.dart';
 import '../widgets/help_sheet.dart';
@@ -203,7 +204,7 @@ class _CaptureScreenState extends State<CaptureScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _showBriefing = _guided;
+    _showBriefing = true; // the same card in both conditions
     _autoCapture = _guided;
     _startCamera();
     // The 20 s "still not passing" help card (guided only).
@@ -673,7 +674,7 @@ class _CaptureScreenState extends State<CaptureScreen>
         setState(() {
           _confirmation = null;
           if (_step < _steps.length) {
-            _showBriefing = _guided;
+            _showBriefing = true; // the same card in both conditions
             _stableFrames = 0;
             _guidance = GuidanceResult.empty();
             _resetShotHelp();
@@ -990,7 +991,8 @@ class _CaptureScreenState extends State<CaptureScreen>
           // Briefing sits above everything. The camera stays alive behind it so
           // there is no delay when the user taps ready.
           if (_showBriefing)
-            _Briefing(
+            ShotCard(
+              guided: _guided,
               step: step,
               shotNumber: _step + 1,
               total: _steps.length,
@@ -1341,143 +1343,6 @@ class _ShotReminder extends StatelessWidget {
             : 'Taking the ${label.toLowerCase()} shot',
         style: const TextStyle(
             color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
-      ),
-    );
-  }
-}
-
-/// Full screen briefing shown before each shot.
-///
-/// One thing at a time. The user reads what to do with the camera idle, rather
-/// than reading an instruction laid over the product they are trying to frame.
-class _Briefing extends StatelessWidget {
-  final ShotStep step;
-  final int shotNumber;
-  final int total;
-  final bool optional;
-  final bool canFinishInstead;
-  final VoidCallback onReady;
-  final VoidCallback onFinish;
-
-  const _Briefing({
-    required this.step,
-    required this.shotNumber,
-    required this.total,
-    required this.optional,
-    required this.canFinishInstead,
-    required this.onReady,
-    required this.onFinish,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: const Color(0xFF12161C).withOpacity(0.96),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(26, 20, 26, 26),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                optional ? 'Optional extra shot' : 'Shot $shotNumber of $total',
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.6),
-                  fontSize: 13,
-                  letterSpacing: 0.6,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                step.label,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 30,
-                    fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 26),
-              Text(
-                step.instruction,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 19, height: 1.45),
-              ),
-              // A good example of this shot: the owner's own certified photo
-              // once added to assets/reference (v1.1.0), else the placeholder.
-              if (ReferenceShot.of(step.shotType) != null) ...[
-                const SizedBox(height: 18),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    ReferenceImage(step.shotType),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Text(
-                        'A good ${step.label.toLowerCase()} shot:\n'
-                        '${ReferenceShot.of(step.shotType)!.line1}\n'
-                        '${ReferenceShot.of(step.shotType)!.line2}',
-                        style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.75),
-                            fontSize: 13.5,
-                            height: 1.4),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 18),
-              Container(
-                padding: const EdgeInsets.all(15),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.07),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(Icons.lightbulb_outline,
-                        color: Colors.amber.shade300, size: 19),
-                    const SizedBox(width: 11),
-                    Expanded(
-                      child: Text(
-                        step.why,
-                        style: TextStyle(
-                            color: Colors.white.withOpacity(0.85),
-                            fontSize: 14.5,
-                            height: 1.4),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Spacer(),
-              Text(
-                'When you tap ready, the camera will check the shot and tell '
-                'you what to fix.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    color: Colors.white.withOpacity(0.55),
-                    fontSize: 13,
-                    height: 1.4),
-              ),
-              const SizedBox(height: 16),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(52)),
-                onPressed: onReady,
-                child: const Text('I am ready'),
-              ),
-              if (canFinishInstead) ...[
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: onFinish,
-                  child: Text('Finish and check my photos',
-                      style: TextStyle(color: Colors.white.withOpacity(0.8))),
-                ),
-              ],
-            ],
-          ),
-        ),
       ),
     );
   }

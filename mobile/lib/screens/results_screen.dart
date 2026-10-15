@@ -78,6 +78,21 @@ class _ResultsScreenState extends State<ResultsScreen> {
     if (!_held && mounted) setState(() => _held = true);
   }
 
+  /// The "Why this score" panel under a photo, or null in study mode.
+  ///
+  /// In a study the participant must not see the per-criterion standard being applied
+  /// while taking part: the panel would teach the guided and the unguided condition
+  /// alike what the framework looks for. Outside study mode it is shown as before.
+  Widget? _breakdownFor(BatchPhoto p) {
+    if (StudySession.current != null) return null;
+    return BreakdownPanel(
+      photo: p,
+      scores: _scoresFor(p),
+      criteria: _criteria,
+      onOpened: _holdForReading,
+    );
+  }
+
   BatchImageResult? _scoresFor(BatchPhoto p) {
     for (final s in _result.selected) {
       if (s.index == p.index) return s;
@@ -214,12 +229,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
                 ...set.map((p) => _SetCard(
                       photo: p,
                       bytes: _bytes(p),
-                      breakdown: BreakdownPanel(
-                        photo: p,
-                        scores: _scoresFor(p),
-                        criteria: _criteria,
-                        onOpened: _holdForReading,
-                      ),
+                      breakdown: _breakdownFor(p),
                     )),
               ],
               if (notUsed.isNotEmpty) ...[
@@ -237,12 +247,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
                         .map((p) => _NotUsedCard(
                               photo: p,
                               bytes: _bytes(p),
-                              breakdown: BreakdownPanel(
-                                photo: p,
-                                scores: _scoresFor(p),
-                                criteria: _criteria,
-                                onOpened: _holdForReading,
-                              ),
+                              breakdown: _breakdownFor(p),
                             ))
                         .toList(),
                   ),
