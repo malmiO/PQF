@@ -38,9 +38,9 @@ void main() {
       return http.Response('{"ok":true}', 200);
     });
 
-    // Session 2 of participant P03 (a GUIDED session), same product as the first.
+    // P04 is UNGUIDED first (ABBA), so session 2 is the GUIDED one; same product as the first.
     StudySession.current = StudySession(
-      participant: 'P03',
+      participant: 'P04',
       product: 'K1',
       session: 2,
       group: StudySession.seller,
@@ -72,8 +72,8 @@ void main() {
       await StudyLog.log('help_card_shown', {'role': 'hero_shot', 'seconds': 9});
       await StudyLog.log('setup_check_shown', {'role': 'angle_shot', 'retakes': 3});
       await StudyLog.log('restart', {'role': null, 'photos_kept': 4});
-      await StudyLog.log('capture_end',
-          {'photo_hashes': photos.map(StudyLog.photoHash).toList()});
+      // Guided: the round trip (ms) of each successful /guidance call.
+      await StudyLog.captureEnd(photos, [112, 98, 143, 87]);
       await StudyLog.ownPicks({
         'main': photos[0],
         'angle1': photos[1],
@@ -84,7 +84,14 @@ void main() {
       await StudyLog.log('video_ready');
     }, () => client);
 
-    expect(bodies.length, 10);
+    // The unguided condition makes no /guidance call: an empty list.
+    StudySession.current = StudySession(
+      participant: 'P04', product: 'K1', session: 1, group: StudySession.seller);
+    await http.runWithClient(() async {
+      await StudyLog.captureEnd(photos, const []);
+    }, () => client);
+
+    expect(bodies.length, 11);
     final events = bodies.map((b) => (jsonDecode(b) as Map)['event']).toList();
     expect(events, [
       'session_start',
@@ -97,7 +104,14 @@ void main() {
       'own_picks',
       'batch_result',
       'video_ready',
+      'capture_end',
     ]);
+
+    final guidedEnd = jsonDecode(bodies[6]) as Map<String, dynamic>;
+    expect(guidedEnd['guidance_ms'], [112, 98, 143, 87]);
+    final unguidedEnd = jsonDecode(bodies.last) as Map<String, dynamic>;
+    expect(unguidedEnd['guidance_ms'], isEmpty);
+    expect(unguidedEnd['condition'], 'UNGUIDED');
 
     final start = jsonDecode(bodies.first) as Map<String, dynamic>;
     expect(start['group'], 'seller');
@@ -109,5 +123,38 @@ void main() {
       File('test/fixtures/study_payloads.jsonl')
           .writeAsStringSync('${bodies.join('\n')}\n');
     }
+  });
+
+  test('guidance_ms is capped at 300 (the latest) and clamped to 0..60000', () async {
+    final bodies = <String>[];
+    final client = MockClient((req) async {
+      bodies.add(req.body);
+      return http.Response('{"ok":true}', 200);
+    });
+    StudySession.current =
+        StudySession(participant: 'P05', product: 'K2', session: 2);
+    addTearDown(() => StudySession.current = null);
+    final long = [for (var i = 0; i < 450; i++) i];
+    await http.runWithClient(() async {
+      await StudyLog.captureEnd([Uint8List.fromList([1, 2, 3])],
+          [...long, 999999, -5]);
+    }, () => client);
+    final ms = (jsonDecode(bodies.single) as Map)['guidance_ms'] as List;
+    expect(ms.length, StudyLog.maxGuidanceMs);
+    expect(ms.every((v) => v is int && v >= 0 && v <= 60000), isTrue);
+    expect(ms.last, 0, reason: '-5 clamped to 0, and it is the latest entry');
+    expect(ms[ms.length - 2], 60000, reason: '999999 clamped to 60000');
+  });
+
+  test('the capture screen times only successful calls and reports them at capture_end',
+      () {
+    final src = File('lib/screens/capture_screen.dart').readAsStringSync();
+    expect(src.contains('final roundTrip = Stopwatch()..start();'), isTrue);
+    expect(src.contains('if (result.ok) _guidanceMs.add(roundTrip.elapsedMilliseconds);'),
+        isTrue);
+    expect(src.contains('StudyLog.captureEnd(_captured, _guidanceMs);'), isTrue);
+    // still no guidance call for the unguided condition
+    expect(src.contains('if (!_guided) return; // UNGUIDED: never ask for guidance'),
+        isTrue);
   });
 }

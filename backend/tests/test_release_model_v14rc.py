@@ -24,10 +24,11 @@ def test_model_is_pinned_to_a_fixed_name_not_the_alias():
     assert config.GEMINI_TIER == "free"
 
 
-def test_release_is_the_release_candidate_and_spec_version_is_unchanged():
-    assert RELEASE == "1.4.0-rc"
+def test_release_is_the_frozen_release_and_the_framework_version_is_separate():
+    # RELEASE was "1.4.0-rc" until the freeze; it is "1.4.0" from 2026-10-15.
+    assert RELEASE == "1.4.0"
     h = client.get("/health").json()
-    assert h["release"] == "1.4.0-rc"
+    assert h["release"] == "1.4.0"
     # The framework version is set separately from the release label (2026-10-15: "1.4").
     assert h["framework_version"] == config.SPEC_VERSION == "1.4"
     assert h["tier"] == "free"

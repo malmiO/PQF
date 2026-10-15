@@ -130,3 +130,68 @@ def test_validate_returns_only_known_fields():
     assert set(out) <= {"event", "timestamp", "participant", "condition", "product",
                         "session", "times", "hash", "shot_requested", "retake_of",
                         "source", "width", "height", "exif_orientation"}
+
+# ---- guidance_ms on capture_end (2026-10-15) ----------------------------------------
+def _capture_end(condition):
+    return next(dict(p) for p in PAYLOADS
+                if p["event"] == "capture_end" and p["condition"] == condition)
+
+
+def test_the_guided_capture_end_carries_the_round_trips(log):
+    p = _capture_end("GUIDED")
+    assert p["guidance_ms"] == [112, 98, 143, 87]
+    assert client.post("/study/log", content=json.dumps(p)).status_code == 200
+    row = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
+    assert row["guidance_ms"] == [112, 98, 143, 87]
+
+
+def test_the_unguided_capture_end_has_an_empty_list(log):
+    p = _capture_end("UNGUIDED")
+    assert p["guidance_ms"] == []
+    assert client.post("/study/log", content=json.dumps(p)).status_code == 200
+    assert json.loads(log.read_text(encoding="utf-8").splitlines()[0])["guidance_ms"] == []
+
+
+def test_capture_end_without_guidance_ms_is_still_accepted(log):
+    p = _capture_end("GUIDED")
+    del p["guidance_ms"]
+    assert client.post("/study/log", content=json.dumps(p)).status_code == 200
+
+
+def test_exactly_300_entries_are_accepted_and_301_are_not(log):
+    p = _capture_end("GUIDED")
+    p["guidance_ms"] = [100] * 300
+    assert client.post("/study/log", content=json.dumps(p)).status_code == 200
+    p["guidance_ms"] = [100] * 301
+    assert client.post("/study/log", content=json.dumps(p)).status_code == 400
+
+
+@pytest.mark.parametrize("bad", [
+    [-1], [60001], [1.5], ["12"], [None], [True], "112,98", {"a": 1}, 112, [[1]],
+])
+def test_guidance_ms_values_are_strictly_checked(log, bad):
+    p = _capture_end("GUIDED")
+    p["guidance_ms"] = bad
+    assert client.post("/study/log", content=json.dumps(p)).status_code == 400
+    assert not log.exists()
+
+
+def test_the_edge_values_0_and_60000_are_accepted(log):
+    p = _capture_end("GUIDED")
+    p["guidance_ms"] = [0, 60000]
+    assert client.post("/study/log", content=json.dumps(p)).status_code == 200
+
+
+@pytest.mark.parametrize("event", ["session_start", "photo_captured", "batch_result",
+                                   "own_picks", "video_ready", "restart"])
+def test_guidance_ms_is_only_allowed_on_capture_end(log, event):
+    p = _by_event(event)
+    p["guidance_ms"] = [100]
+    assert client.post("/study/log", content=json.dumps(p)).status_code == 400
+
+
+def test_an_unknown_field_on_capture_end_is_still_rejected(log):
+    p = _capture_end("GUIDED")
+    p["guidance_latency"] = [100]
+    r = client.post("/study/log", content=json.dumps(p))
+    assert r.status_code == 400 and "not allowed" in r.text
