@@ -196,6 +196,10 @@ class _CaptureScreenState extends State<CaptureScreen>
   /// capture of that slot records retake_of (study mode only).
   final Map<String, String> _undoneHashBySlot = {};
 
+  /// Round trip (ms) of every successful /guidance call this capture; stays empty in the
+  /// unguided condition, which makes no call. Logged once, at capture_end.
+  final List<int> _guidanceMs = [];
+
   /// The shot slot name used in the study log: main | angle1 | angle2 | detail
   /// | extra (from the step label).
   String _slotName(ShotStep s) => s.label.toLowerCase().replaceAll(' ', '');
@@ -406,8 +410,12 @@ class _CaptureScreenState extends State<CaptureScreen>
       }
 
       final shot = _stepAt(_step).shotType;
+      // Round trip of this call, request sent to response parsed (study log, capture_end).
+      final roundTrip = Stopwatch()..start();
       final result =
           await _api.guidance(jpeg, shot: shot, rotation: sensorOrientation);
+      roundTrip.stop();
+      if (result.ok) _guidanceMs.add(roundTrip.elapsedMilliseconds);
       final totalMs = DateTime.now().difference(started).inMilliseconds;
 
       if (_diagnostics) {
@@ -727,8 +735,7 @@ class _CaptureScreenState extends State<CaptureScreen>
         await _controller?.stopImageStream();
       } catch (_) {}
       study.captureEndAt = DateTime.now().toUtc();
-      StudyLog.log('capture_end',
-          {'photo_hashes': _captured.map(StudyLog.photoHash).toList()});
+      StudyLog.captureEnd(_captured, _guidanceMs);
       if (!mounted) return;
       final picks = await Navigator.of(context).push<Map<String, Uint8List>>(
           MaterialPageRoute(builder: (_) => OwnPicksScreen(photos: _captured)));

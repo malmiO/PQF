@@ -136,6 +136,21 @@ class StudyLog {
         'exif_orientation': exifOrientation,
       });
 
+  /// The most /guidance round trips one capture_end can carry (the server accepts 300).
+  static const int maxGuidanceMs = 300;
+
+  /// End of capture: the hashes of the photos taken, and how long each SUCCESSFUL
+  /// /guidance call took (ms, request sent to response parsed). Empty in the unguided
+  /// condition, which makes no call. Past [maxGuidanceMs] only the latest are kept.
+  static Future<void> captureEnd(List<Uint8List> photos, List<int> guidanceMs) {
+    final ms = [for (final v in guidanceMs) v.clamp(0, 60000)];
+    final kept = ms.length > maxGuidanceMs ? ms.sublist(ms.length - maxGuidanceMs) : ms;
+    return log('capture_end', {
+      'photo_hashes': photos.map(photoHash).toList(),
+      'guidance_ms': kept,
+    });
+  }
+
   /// The participant's own picks: slot (main, angle1, angle2, detail) -> photo.
   static Future<void> ownPicks(Map<String, Uint8List> picks) =>
       log('own_picks', {'own_picks': picks.map((k, v) => MapEntry(k, photoHash(v)))});

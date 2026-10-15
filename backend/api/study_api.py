@@ -44,7 +44,8 @@ ALLOWED = {"event", "timestamp", "participant", "condition", "product", "session
            "group", "device_model", "app_version", "app_build", "apk_version",
            "condition_order", "same_product_as_first",
            "hash", "shot_requested", "retake_of", "source", "width", "height",
-           "exif_orientation", "role", "seconds", "retakes", "photos_kept"}
+           "exif_orientation", "role", "seconds", "retakes", "photos_kept",
+           "guidance_ms"}
 
 # The new fields are accepted ONLY on the event that carries them. Anything else, and any
 # field not listed in ALLOWED at all, is refused (400), so the log stays codes and numbers.
@@ -56,7 +57,12 @@ EXTRA_BY_EVENT = {
     "help_card_shown": {"role", "seconds"},
     "setup_check_shown": {"role", "retakes"},
     "restart": {"role", "photos_kept"},
+    # v1.4.0 (2026-10-15): round trip of each successful /guidance call, in ms. Empty in the
+    # unguided condition, which makes no call.
+    "capture_end": {"guidance_ms"},
 }
+MAX_GUIDANCE_MS_ENTRIES = 300
+MAX_GUIDANCE_MS = 60000
 GROUPS = {"seller", "non_expert"}
 SOURCES = {"in_app", "upload"}
 DEVICE_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._+-]{0,47}$")
@@ -186,6 +192,11 @@ def _validate_new_fields(entry: dict, out: dict) -> None:
         out["retakes"] = _int(entry["retakes"], "retakes", 0, 100)
     if "photos_kept" in entry:
         out["photos_kept"] = _int(entry["photos_kept"], "photos_kept", 0, 200)
+    if "guidance_ms" in entry:
+        g = entry["guidance_ms"]
+        if not isinstance(g, list) or len(g) > MAX_GUIDANCE_MS_ENTRIES:
+            raise ValueError(f"guidance_ms is a list of at most {MAX_GUIDANCE_MS_ENTRIES} numbers")
+        out["guidance_ms"] = [_int(v, "guidance_ms[]", 0, MAX_GUIDANCE_MS) for v in g]
 
 
 def validate(entry: dict) -> dict:
