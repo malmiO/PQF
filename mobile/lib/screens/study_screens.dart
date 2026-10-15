@@ -89,20 +89,24 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
     if (mounted) setState(() => _data = d);
   }
 
-  void _say(String message) {
+  void _say(String message, {int seconds = 4}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), duration: Duration(seconds: seconds)));
   }
 
-  /// One zip (study_log.jsonl + study/photos/...) in Downloads/PQF/study.
+  /// One zip (study_log.jsonl + study/photos/...) in the app's own folder, which needs
+  /// no storage permission and can be pulled with adb. The message gives the full path.
   Future<void> _export() async {
     setState(() => _busy = true);
     try {
       final r = await StudyData.export();
-      _say(r.shared
-          ? 'Exported to Downloads/PQF/study: ${r.zip.path.split('/').last}'
-          : 'Android would not allow Downloads. The zip is in the app folder: '
-              '${r.zip.path}');
+      _say(
+          r.adbReachable
+              ? 'Exported. On the laptop: adb pull "${r.zip.path}"'
+              : "Exported to the app's private folder (not reachable with adb): "
+                  '${r.zip.path}',
+          seconds: 20);
     } on StateError catch (e) {
       _say(e.message);
     } catch (e) {
