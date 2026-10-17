@@ -109,3 +109,34 @@ research/results/synthetic/*/
 small.jpg
 key.properties
 source/
+# Blind rating app (2026-10-16): participants' product photos, keys and answers must never reach git
+research/rating_app/rating_data/
+research/rating_app/rating_private/
+research/rating_app/backups/
+research/rating_app/exports/
+research/rating_app/ratings.db
+research/rating_app/ratings.db-wal
+research/rating_app/ratings.db-shm
+research/rating_app/responses_backup.csv
+research/rating_app/.streamlit/secrets.toml
+research/results/dryrun/
+
+# Human cross-check banks (2026-10-16): holdout pair key, own-set scores, candidate photo lists
+research/results/crosscheck/
+
+research/results/
+research/devices/
+research/rating_app/rating_private/
+research/results/ai_judges/
+research/results/o1_holdout/
+research/rating_app/
+
+mobile/android/
+mobile/android/key.properties
+mobile/android/.gitignore:12:key.properties
+
+mobile/linux/flutter
+mobile/macos/Flutter
+mobile/windows/flutter
+
+research/test_set

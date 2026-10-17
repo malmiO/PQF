@@ -21,10 +21,14 @@ import json
 import os
 import statistics
 import sys
+import time
 from pathlib import Path
 
-# Re-scoring must be real and uncached, and must never use mock.
-os.environ["PQF_SCORE_CACHE"] = "off"
+# Re-scoring must be real, and must never use mock. The variance pass needs the cache OFF
+# (default); the dry-run zip mode of 2026-10-15 can be run with --cache on (1 run, cached).
+_CACHE = "on" if sys.argv[1:] and "--cache" in sys.argv and \
+    sys.argv[sys.argv.index("--cache") + 1:][:1] == ["on"] else "off"
+os.environ["PQF_SCORE_CACHE"] = _CACHE
 os.environ.pop("PQF_SEMANTIC_MOCK", None)
 
 from dotenv import load_dotenv
@@ -87,14 +91,133 @@ def _photos(root: Path):
         yield p.parent.name, p.stem, p
 
 
+def run_zip(args) -> int:
+    """Zip mode (2026-10-15): check exported study zips against the server pipeline.
+
+    Per zip: CRC and file-name == sha256; every hash the log mentions is in the zip; every
+    log entry passes the SERVER's own validator (study_api.validate). Every logged photo is
+    re-scored through _platform_format + score_image (ONE run, cache as --cache) and the
+    rescored TQS must equal the logged TQS within 0.001. Writes under --out:
+      rescored_photos.csv       per photo: logged vs rescored scores, all 11 criteria, ms
+      rescored_decisions.json   what analysis_study.py needs to rebuild a set offline
+      rescore_report.json       counts, timing, Gemini calls (cache misses), mismatches
+    The key is needed only for photos that are not already in the score cache."""
+    import csv
+    from backend.pqf.semantic import score_cache as sc
+    from backend.pqf.pipeline import score_image
+    import studyzip as sz
+
+    out = Path(args.out or "research/results/dryrun/rescore")
+    out.mkdir(parents=True, exist_ok=True)
+    report = {"zips": [], "cache": args.cache}
+    all_photos, logs = {}, []
+    for zp in args.zip:
+        r = sz.read_zip(Path(zp))
+        logged_h = sz.logged_hashes(r["log"])
+        ok, errs = sz.schema_check(r["log"])
+        missing = {k: sorted(h[:10] for h in v if h not in r["photos"])
+                   for k, v in logged_h.items()}
+        report["zips"].append({
+            "zip": str(zp), "log_entries": len(r["log"]), "photos_in_zip": len(r["photos"]),
+            "crc_ok": not r["bad_crc"], "name_sha256_mismatch": len(r["name_mismatch"]),
+            "schema_accepted": ok, "schema_rejected": [list(e) for e in errs],
+            "hashes_logged_not_in_zip": missing,
+            "all_logged_hashes_present": all(not v for v in missing.values())})
+        all_photos.update(r["photos"])
+        logs.append(r["log"])
+    merged = sz.merge_logs(logs)
+    (out / "merged_log.jsonl").write_text(
+        "".join(json.dumps(e) + "\n" for e in merged), encoding="utf-8")
+
+    meta, logged = {}, {}
+    for e in merged:
+        if e["event"] == "batch_result":
+            for p in e.get("photos", []):
+                logged.setdefault(p["hash"], p)
+                meta.setdefault(p["hash"], (e["participant"], e["condition"], e["product"],
+                                            e.get("session", "")))
+    before = sc.stats()
+    rows, decisions, mismatches, times = [], {}, [], []
+    for h in sorted(logged):
+        if h not in all_photos:
+            continue
+        data = _platform_format(all_photos[h])
+        t = time.perf_counter()
+        d = score_image(data, path=None)
+        ms = round(1000 * (time.perf_counter() - t), 1)
+        times.append(ms)
+        tq = round(_tqs_only(data), 4)
+        lt = logged[h].get("tqs")
+        match = lt is not None and abs(tq - round(float(lt), 4)) <= 0.001
+        if not match:
+            mismatches.append((h[:10], lt, tq))
+        ts = getattr(d, "technical_scores", None) or {}
+        ss = d.semantic_scores or {}
+        p, c, prod, sess = meta[h]
+        rows.append({"hash": h, "participant": p, "condition": c, "product": prod,
+                     "session": sess, "logged_tqs": lt, "rescored_tqs": tq,
+                     "tqs_match": match, "logged_sqs": logged[h].get("sqs"),
+                     "rescored_sqs": round(d.sqs, 4), "logged_fqs": logged[h].get("fqs"),
+                     "rescored_fqs": round(d.fqs, 4), "logged_role": logged[h].get("role"),
+                     "rescored_role": d.role, "reason": d.reason, "ms": ms,
+                     **{f"t_{k}": round(v, 4) for k, v in ts.items()},
+                     **{f"s_{k}": round(v, 4) for k, v in ss.items()}})
+        sig = getattr(d, "view_sig", None)
+        decisions[h] = {"tqs": d.tqs, "sqs": d.sqs, "fqs": d.fqs, "role": d.role,
+                        "passed": d.passed, "hard_rejected": d.hard_rejected,
+                        "reason": d.reason, "semantic_scores": ss, "technical_scores": ts,
+                        "view_sig": None if not sig else {
+                            "hash": np.asarray(sig["hash"]).astype(int).tolist(),
+                            "sil": np.asarray(sig["sil"]).astype(int).tolist()}}
+    after = sc.stats()
+    if rows:
+        keys = list(dict.fromkeys(k for r in rows for k in r))
+        with open(out / "rescored_photos.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=keys)
+            w.writeheader()
+            w.writerows(rows)
+    (out / "rescored_decisions.json").write_text(json.dumps(decisions), encoding="utf-8")
+    sem = [r for r in rows if r["reason"] in ("ok", "below_fqs_pass_or_no_role")]
+    report.update({
+        "photos_logged": len(logged), "photos_rescored": len(rows),
+        "logged_photos_not_in_any_zip": len([h for h in logged if h not in all_photos]),
+        "tqs_checked": len(rows), "tqs_within_0.001": len(rows) - len(mismatches),
+        "tqs_mismatches": [list(m) for m in mismatches],
+        "time_per_photo_s": {
+            "mean": round(statistics.mean(times) / 1000, 2) if times else None,
+            "median": round(statistics.median(times) / 1000, 2) if times else None,
+            "max": round(max(times) / 1000, 2) if times else None,
+            "total": round(sum(times) / 1000, 1)},
+        "gemini_calls_cache_misses": after["misses"] - before["misses"],
+        "cache_hits": after["hits"] - before["hits"],
+        "photos_that_reached_semantic": len(sem),
+        "sqs_logged_vs_rescored": {
+            "n": len(sem), "role_agree": sum(1 for r in sem
+                                             if r["rescored_role"] == r["logged_role"]),
+            "mean_abs_diff": round(statistics.mean(
+                abs(float(r["rescored_sqs"]) - float(r["logged_sqs"] or 0)) for r in sem), 4)
+            if sem else None}})
+    (out / "rescore_report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
+    print(json.dumps(report, indent=1))
+    return 0 if not mismatches else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dir", required=True, help="Unzipped export folder.")
+    ap.add_argument("--dir", help="Unzipped export folder.")
+    ap.add_argument("--zip", action="append", default=[],
+                    help="Exported study zip (repeatable). Dry-run mode, see run_zip().")
+    ap.add_argument("--cache", choices=["on", "off"], default="off")
+    ap.add_argument("--out", help="Folder for the --zip outputs.")
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--max-photos", type=int, default=0,
                     help="Limit the semantic variance pass (0 = all).")
     ap.add_argument("--august-sqs-range", type=float, default=AUGUST_SQS_RANGE)
     args = ap.parse_args()
+    if args.zip:
+        return run_zip(args)
+    if not args.dir:
+        ap.error("--dir or --zip is required")
 
     root = Path(args.dir)
     log_path = (root / "study_log.jsonl")

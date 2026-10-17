@@ -15,7 +15,8 @@ Outputs
         --slots (pre-register the choice): "main" (default, 1 pair per participant) or
         "all" (main, angle1, angle2, detail: 4 pairs per participant, analysed per
         participant so pairs from one person are not counted as independent). Sides random.
-  rater_sheet.csv                       rater, pair_id, preferred (A | B | tie) - to fill in
+  rater_sheet.csv                       rater, pair_id, preferred (A | B | tie), strength (1-5)
+                                        - to fill in
   blind_key.csv                         pair_id, A_is (guided | unguided)  - NOT for raters
   expert_sets/set_<id>/img_<n>.jpg      for O3: all photos of each participant's GUIDED
         session, renamed; experts pick the 4 they would use (main, 2 angles, detail)
@@ -82,7 +83,7 @@ def build(log: list, photos: dict, out: Path, seed: int, slots=("main",)) -> dic
         shutil.copy2(photos[b], pairs_dir / f"pair_{pair_id}_B{photos[b].suffix.lower()}")
         key.append({"pair_id": pair_id, "A_is": a_is, "participant": pid, "slot": slot,
                     "seed": seed})
-        sheet.append({"rater": "", "pair_id": pair_id, "preferred": ""})
+        sheet.append({"rater": "", "pair_id": pair_id, "preferred": "", "strength": ""})
     rng.shuffle(sheet)
     write_csv(out / "blind_key.csv", key)
     write_csv(out / "rater_sheet.csv", sheet)
@@ -109,6 +110,68 @@ def build(log: list, photos: dict, out: Path, seed: int, slots=("main",)) -> dic
             "missing_photos": len(missing)}
 
 
+def build_photographer_packs(log: list, photos: dict, out: Path, seed: int,
+                             photographers: list) -> dict:
+    """PDF packs (2026-10-15): one printable PDF per photographer, NO scores and NO condition
+    labels, plus private key CSVs. Needs build() to have written blind_pairs/ + blind_key.csv.
+
+      (a) pair pack: each participant's own MAIN pick, guided vs unguided, sides random (A/B)
+          as already fixed in blind_key.csv; both photographers see the SAME A/B sides, in a
+          different page order;
+      (b) product pack: every photo taken of a product (both conditions pooled, de-duplicated
+          by hash), numbered in a random order, then a pick page (main, angle 1, angle 2, detail).
+
+    Writes <out>/packs/<PH>_pack.pdf, packs/photographer_sheet.csv (pairs, to fill in),
+    packs/photographer_picks_sheet.csv (product picks, to fill in), and the PRIVATE
+    packs/pack_key.csv (photographer, page_no, pair_id) and packs/product_photo_key.csv
+    (product, number, sha256, participant, condition)."""
+    from blind_pack_pdf import build_pdf
+    rng = random.Random(seed + 1)
+    packs = out / "packs"
+    packs.mkdir(parents=True, exist_ok=True)
+    keyrows = [r for r in __import__("csv").DictReader(
+        open(out / "blind_key.csv", encoding="utf-8"))]
+    pairs_dir = out / "blind_pairs"
+    pair_items = []
+    for r in keyrows:
+        a = next(pairs_dir.glob(f"pair_{r['pair_id']}_A.*"))
+        b = next(pairs_dir.glob(f"pair_{r['pair_id']}_B.*"))
+        pair_items.append((r["pair_id"], a, b))
+    # (b) every photo of each product, with the condition and participant kept private
+    by_product = defaultdict(dict)       # product -> sha -> (participant, condition)
+    for e in log:
+        if e["event"] == "capture_end":
+            for h in e.get("photo_hashes", []):
+                by_product[e["product"]].setdefault(h, (e["participant"], e["condition"]))
+    products, pkey = {}, []
+    for product in sorted(by_product):
+        hs = [h for h in by_product[product] if h in photos]
+        rng.shuffle(hs)
+        products[product] = [(i, photos[h]) for i, h in enumerate(hs, 1)]
+        for i, h in enumerate(hs, 1):
+            pkey.append({"product": product, "number": i, "sha256": h,
+                         "participant": by_product[product][h][0],
+                         "condition": by_product[product][h][1]})
+    pack_key, sheet, picks = [], [], []
+    pages = {}
+    for ph in photographers:
+        order = pair_items[:]
+        rng.shuffle(order)
+        pages[ph] = build_pdf(packs / f"{ph}_pack.pdf", ph, order, products)
+        for n, (pid, _, _) in enumerate(order, 1):
+            pack_key.append({"photographer": ph, "page_no": n, "pair_id": pid})
+            sheet.append({"rater": ph, "pair_id": pid, "preferred": "", "strength": ""})
+        for product in products:
+            for role in ("main", "angle1", "angle2", "detail"):
+                picks.append({"rater": ph, "product": product, "role": role, "photo_no": ""})
+    write_csv(packs / "pack_key.csv", pack_key)
+    write_csv(packs / "product_photo_key.csv", pkey)
+    write_csv(packs / "photographer_sheet.csv", sheet)
+    write_csv(packs / "photographer_picks_sheet.csv", picks)
+    return {"pdfs": {ph: f"{ph}_pack.pdf ({n} pages)" for ph, n in pages.items()},
+            "pairs": len(pair_items), "products": {k: len(v) for k, v in products.items()}}
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--log", required=True, type=Path)
@@ -116,9 +179,14 @@ if __name__ == "__main__":
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--seed", type=int, default=20261007)
     ap.add_argument("--slots", choices=["main", "all"], default="main")
+    ap.add_argument("--photographers", default="",
+                    help="e.g. PH1,PH2: also write one printable PDF per photographer")
     a = ap.parse_args()
     slots = ("main",) if a.slots == "main" else ("main", "angle1", "angle2", "detail")
     r = build(load_log(a.log), index_photos(a.photos), a.out, a.seed, slots)
     print(r)
+    if a.photographers:
+        print(build_photographer_packs(load_log(a.log), index_photos(a.photos), a.out, a.seed,
+                                       [x.strip() for x in a.photographers.split(",") if x.strip()]))
     if r["missing_photos"]:
         print("WARNING: some logged photos were not found in --photos; export them from the phones.")
