@@ -35,8 +35,9 @@ CODE_MAP = {          # code -> (role, violated_criterion)
     "V-OFFCENTRE": ("degraded", "S1"),
     "V-ANGLE":     ("degraded", "S4"),
 }
-FNAME_RE = re.compile(r"^(p\d{2})_(" + "|".join(CODE_MAP) + r")\.(jpg|jpeg|png)$",
-                      re.IGNORECASE)
+FNAME_RE = re.compile(
+    r"^(p\d{2})_(CLEAN|V[-_](?:BLUR|DARK|BRIGHT|CLUTTER|OFFCENTRE|ANGLE))\.(jpg|jpeg|png)$",
+    re.IGNORECASE)
 
 FIELDS = ["filename", "relpath", "category", "source", "role",
           "violated_criterion", "product_id", "abo_item_id", "licence"]
@@ -55,7 +56,7 @@ def build_phone_rows():
             if not m:
                 problems.append(os.path.join(cat, fname))
                 continue
-            pid, code = m.group(1).lower(), m.group(2).upper()
+            pid, code = m.group(1).lower(), m.group(2).upper().replace("_", "-")
             role, crit = CODE_MAP[code]
             rows.append({
                 "filename": fname,

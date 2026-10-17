@@ -1,0 +1,792 @@
+"""
+promo.py  -  render the marketing video from an automatic plan (2026-10-06).
+
+Still ASSEMBLY, never generation: every frame is a certified photograph, moved and
+captioned, so the quality guarantee survives into the video (decided 2026-09-25).
+The plan (plan.py) decides WHAT appears; this module decides HOW it looks.
+
+  * The product is FRAMED, not fitted: whole_product_box finds ALL of it (a pair is
+    framed together; the framework's views.product_box is the fallback) and each shot
+    is cropped around it, so it fills a large part of the frame.
+  * Short form structure: hook (main shot, product name, shop), angles (pans), a
+    FEATURE SCENE (the detail shot with the owner's key features pointed out by
+    animated lines and labels), end card (price, call to action, contact, shop).
+  * Owner text only, inside the 9:16 safe zones (top 14 percent, bottom 35 percent
+    free of text) and never over the product.
+  * Pace matches the music mood (Yang et al., 2025, JTAER): calm holds each shot
+    longer, upbeat shorter. Transitions are quick slides for every mood (2026-10-11: a
+    dissolve stacked two photos). Each shot moves differently for visual variation.
+
+No claim is made that the video increases sales. It follows documented guidance.
+Text is English only; Sinhala needs complex script shaping and is future work.
+"""
+from __future__ import annotations
+
+import logging
+import math
+import os
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
+FPS = 30
+FORMATS = {"vertical": (1080, 1920), "square": (1080, 1080)}
+
+# Safe zones as fractions of height - top and bottom kept free of text; side margin.
+SAFE = {"vertical": (0.14, 0.35, 0.06), "square": (0.07, 0.07, 0.07)}
+
+# Transitions (v1.4.0, 2026-10-11). The calm and elegant dissolves were 0.55 s and 0.50 s,
+# which with the easing held two full frames visibly stacked for most of a second (found
+# on a dry run, pair of earrings). Shortening the dissolve to 0.35 s still showed a 50/50
+# double exposure of two photos at different scales for about ten frames, so every mood
+# now uses a quick slide, which never blends two frames. Pace (how long each shot is held)
+# still follows the mood. Set "transition" back to "fade" to restore a dissolve.
+MOOD_STYLE = {
+    "calm":    {"pace": 1.25, "transition": "slide", "trans_s": 0.35},
+    "elegant": {"pace": 1.10, "transition": "slide", "trans_s": 0.35},
+    "upbeat":  {"pace": 0.80, "transition": "slide", "trans_s": 0.30},
+}
+BASE_SECONDS = {"hook": 1.8, "angle": 2.1, "detail": 2.3, "end": 3.0}
+FEATURE_BASE, FEATURE_EACH = 1.6, 0.8     # feature scene: time to read each label
+
+# LAYOUT. Text and product never share space. Per format: where the text band
+# starts, and per shot kind the product's (centre_y, height fraction).
+LAYOUT = {
+    "vertical": {"text_top": 0.150, "end_text": 0.150, "text_bottom": 0.645,
+                 "label_band": (0.215, 0.80),
+                 "hook": (0.54, 0.46), "angle": (0.54, 0.44), "detail": (0.55, 0.56),
+                 # v1.5.0 (2026-10-17): the key features card was 34 % and the end card 26 %
+                 # of the frame height (the product read small). Feature card 60 %; the
+                 # end card is now text on top (price, call to action, shop, all inside
+                 # the 14-65 % safe band) and the product at 50 % below it.
+                 "feature": (0.505, 0.60), "end": (0.63, 0.50), "end_limit": 0.36},
+    # text_top was 0.065 and text_bottom 0.935, both outside SAFE's 7 % margins;
+    # found by the measured checklist (v1.1.0) and moved inside them
+    "square":   {"text_top": 0.075, "end_text": 0.615, "text_bottom": 0.925,
+                 "label_band": (0.17, 0.93),
+                 "hook": (0.575, 0.62), "angle": (0.575, 0.60), "detail": (0.58, 0.70),
+                 "feature": (0.55, 0.60), "end": (0.31, 0.50), "end_limit": 0.925},
+}
+MAX_WIDTH_FILL = 0.86      # product never wider than this share of the frame
+FEATURE_WIDTH_FILL = 0.60  # feature scene: room for label columns on both sides
+LABEL_COLUMN = 0.20        # width share of each label column
+MAX_UPSCALE = 2.4          # never enlarge a photo more than this
+
+# Detail and feature shots (v1.4.0, 2026-10-11). The detail shot is an already cropped
+# plate that then pushes in, so MAX_UPSCALE 2.4 followed by the push enlarged a small
+# product up to about 2.7 times and read soft. For these two shots a small product now
+# stays smaller instead of being blurred, and the push itself is capped.
+DETAIL_MAX_UPSCALE = 1.5   # source -> frame enlargement allowed for detail / feature
+FEATURE_MAX_UPSCALE = 3.6  # v1.5.0: the feature card may enlarge as far as hook and angle
+END_MAX_UPSCALE = 3.0      # v1.5.0: so the end card can reach 50 % of the frame height
+DETAIL_PUSH_MAX = 1.3      # the motion never enlarges the plate more than this
+
+# WHOLE-PRODUCT framing (v1.4.0, 2026-10-11). pipeline.views.product_box returns ONE
+# connected region, so a pair of earrings was framed as one earring and the other was cut
+# at the frame edge, on the end card too. The box is now taken over every significant
+# non-background region that does not touch the frame, as in the view signature fix of
+# 2026-10-09 (smoothed background difference). Constants are the same values.
+WHOLE_BORDER = 0.10        # border band used to estimate the background colour
+WHOLE_DIFF_LEVEL = 24      # grey levels from the background = product
+WHOLE_SMOOTH_SIGMA = 3.0   # px, smoothing of the difference (stops flicker at faint edges)
+WHOLE_MIN_REGION = 0.002   # share of the frame a region needs to count
+WHOLE_MARGIN = 0.04        # margin added on every side, as a share of the box size
+WHOLE_MAX_FRAME_SHARE = 0.85   # a box this big means segmentation failed: fall back
+
+FONT_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
+
+
+@dataclass
+class PromoResult:
+    path: Path
+    duration_seconds: float
+    image_count: int
+    format_name: str
+    has_audio: bool
+    mood: str
+    # What the renderer did and measured (v1.1.0): brightness matching per image,
+    # the timeline of shots, and per shot framing. Saved into the plan.
+    record: dict | None = None
+
+
+# --------------------------------------------------------------------------- framing
+def whole_product_box(img: np.ndarray):
+    """(x0, y0, x1, y1) around EVERY significant non-background region that does not
+    touch the frame edge, with a small margin; None if nothing significant is found or
+    the result is implausibly large (segmentation failed).
+
+    The background colour is the median of the border band; the difference from it is
+    smoothed (so faint edges do not flicker) and thresholded; every connected region of
+    at least WHOLE_MIN_REGION of the frame counts. A pair of earrings, a product with a
+    detached part, or a card with the product on it is therefore framed WHOLE, where
+    pipeline.views.product_box returns one connected region only. Regions that touch the
+    frame edge (a vignette, a shadow running off the photo) are ignored when anything
+    else was found, as in the view signature."""
+    h, w = img.shape[:2]
+    b = max(2, int(min(h, w) * WHOLE_BORDER))
+    border = np.concatenate([img[:b].reshape(-1, 3), img[-b:].reshape(-1, 3),
+                             img[:, :b].reshape(-1, 3), img[:, -b:].reshape(-1, 3)])
+    bg = np.median(border, axis=0).astype(np.float32)
+    diff = np.abs(img.astype(np.float32) - bg).max(axis=2)
+    mask = cv2.GaussianBlur(diff, (0, 0), WHOLE_SMOOTH_SIGMA) > WHOLE_DIFF_LEVEL
+    n, _, st, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
+    keep = [i for i in range(1, n) if st[i][4] >= WHOLE_MIN_REGION * h * w]
+    if not keep:
+        return None
+    inner = [i for i in keep if not (st[i][0] == 0 or st[i][1] == 0
+                                     or st[i][0] + st[i][2] >= w or st[i][1] + st[i][3] >= h)]
+    use = inner or keep
+    x0 = min(st[i][0] for i in use)
+    y0 = min(st[i][1] for i in use)
+    x1 = max(st[i][0] + st[i][2] for i in use)
+    y1 = max(st[i][1] + st[i][3] for i in use)
+    mx, my = WHOLE_MARGIN * (x1 - x0), WHOLE_MARGIN * (y1 - y0)
+    x0, y0 = max(0.0, x0 - mx), max(0.0, y0 - my)
+    x1, y1 = min(float(w), x1 + mx), min(float(h), y1 + my)
+    if (x1 - x0) * (y1 - y0) > WHOLE_MAX_FRAME_SHARE * w * h:
+        return None
+    return (float(x0), float(y0), float(x1), float(y1))
+
+
+def product_box_xywh(img: np.ndarray) -> tuple:
+    """(cx, cy, w, h) of the WHOLE product in full resolution pixels.
+
+    Whole-product box first (see whole_product_box); when that finds too little or
+    too much, the framework's own finder with its central region fallback."""
+    try:
+        h, w = img.shape[:2]
+        k = 1024 / max(h, w)
+        small = cv2.resize(img, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA)
+        box = whole_product_box(small)
+        if box is None:
+            from ..pqf.pipeline.views import product_box
+            box = product_box(small)
+        x0, y0, x1, y1 = (v / k for v in box)
+        return ((x0 + x1) / 2, (y0 + y1) / 2, max(20, x1 - x0), max(20, y1 - y0))
+    except Exception:
+        h, w = img.shape[:2]
+        return (w / 2, h / 2, w * 0.5, h * 0.5)
+
+
+def _plate(img: np.ndarray, out_w: int, out_h: int, fill_h: float, centre_y: float,
+           max_w_fill: float = MAX_WIDTH_FILL, oversample: float = 1.3,
+           max_upscale: float = MAX_UPSCALE):
+    """Crop around the product so it fills `fill_h` of the frame height (and at most
+    `max_w_fill` of its width). Areas outside the photo continue the photo's own
+    edges, blurred, with the photo feathered in, so no band or box is visible.
+    `max_upscale` is the most the photo may be enlarged (lower for detail shots).
+    Returns (plate, to_plate) where to_plate maps photo (x, y) to plate pixels."""
+    cx, cy, pw, ph = product_box_xywh(img)
+    aspect = out_w / out_h
+    crop_h = max(ph / fill_h, (pw / max_w_fill) / aspect)
+    crop_h = max(crop_h, out_h / max_upscale)
+    crop_w = crop_h * aspect
+    top = cy - crop_h * centre_y
+    left = cx - crop_w / 2
+    pad = int(max(crop_w, crop_h)) + 4
+    h0, w0 = img.shape[:2]
+    # The crop window in the photo padded by `pad` on every side, and its scale
+    # to the plate.
+    x0, y0 = int(round(left + pad)), int(round(top + pad))
+    ch, cw = int(round(crop_h)), int(round(crop_w))
+    W, H = int(out_w * oversample), int(out_h * oversample)
+    sx, sy = W / cw, H / ch
+
+    # Memory (v1.1.0): the padded photo is never built at full size. Before, the
+    # full size padded copy, a float copy of it and an enlarged blur were made
+    # (several hundred MB for a small product on the end card); only the crop
+    # window was then used. Now the edge extension is blurred at 1/k scale, as
+    # before, and only its crop window is enlarged, straight to the plate; the
+    # photo is scaled once to the plate and feathered in there.
+    k = 8
+    pk = pad // k
+    small = cv2.resize(img, (max(1, w0 // k), max(1, h0 // k)), interpolation=cv2.INTER_AREA)
+    small = cv2.copyMakeBorder(small, pk, pk, pk, pk, cv2.BORDER_REPLICATE)
+    small = cv2.GaussianBlur(small, (0, 0), sigmaX=max(3, min(small.shape[:2]) / 25))
+    # small pixel (xs, ys) is photo pixel (k (xs - pk), k (ys - pk))
+    to_bg = np.float32([[sx * k, 0, sx * (pad - x0 - k * pk)],
+                        [0, sy * k, sy * (pad - y0 - k * pk)]])
+    plate = cv2.warpAffine(small, to_bg, (W, H), flags=cv2.INTER_LINEAR,
+                           borderMode=cv2.BORDER_REPLICATE).astype(np.float32)
+
+    feather = max(8, int(min(h0, w0) * 0.08))
+    a = np.ones((h0, w0), np.float32)
+    ramp = np.linspace(0.0, 1.0, feather, dtype=np.float32)
+    a[:feather] *= ramp[:, None]; a[-feather:] *= ramp[::-1][:, None]
+    a[:, :feather] *= ramp[None, :]; a[:, -feather:] *= ramp[::-1][None, :]
+    if sx < 1:            # shrinking: area resample first, as the crop resize did
+        src = cv2.resize(img, (max(1, round(w0 * sx)), max(1, round(h0 * sy))),
+                         interpolation=cv2.INTER_AREA)
+        a = cv2.resize(a, (src.shape[1], src.shape[0]), interpolation=cv2.INTER_AREA)
+        # src is already at plate scale: only the offset is left
+        to_ph = np.float32([[1, 0, sx * (pad - x0)], [0, 1, sy * (pad - y0)]])
+        interp = cv2.INTER_LINEAR
+    else:                 # enlarging: Lanczos, as the crop resize did
+        src = img
+        to_ph = np.float32([[sx, 0, sx * (pad - x0)], [0, sy, sy * (pad - y0)]])
+        interp = cv2.INTER_LANCZOS4
+    photo = cv2.warpAffine(src, to_ph, (W, H), flags=interp, borderMode=cv2.BORDER_CONSTANT)
+    alpha = cv2.warpAffine(a, to_ph, (W, H), flags=cv2.INTER_LINEAR,
+                           borderMode=cv2.BORDER_CONSTANT)[..., None]
+    plate = photo.astype(np.float32) * alpha + plate * (1 - alpha)
+    plate = np.clip(plate, 0, 255).astype(np.uint8)
+    to_plate = lambda x, y: ((x + pad - x0) * sx, (y + pad - y0) * sy)
+    return plate, to_plate
+
+
+def _ease(t: float) -> float:
+    return 0.5 - 0.5 * math.cos(math.pi * max(0.0, min(1.0, t)))
+
+
+def _matrix(plate_wh, out_w, out_h, t, motion, direction, anchor_y) -> np.ndarray:
+    W, H = plate_wh
+    e = _ease(t)
+    base = out_w / W
+    if motion == "push":                   # hook: quick push in
+        z, dx = 1.0 + 0.08 * e, 0.0
+    elif motion == "deep":                 # detail: deeper push in, never past the cap
+        z, dx = min(DETAIL_PUSH_MAX, 1.0 + 0.14 * e), 0.0
+    elif motion == "pan":                  # angle: lateral pan with slight zoom
+        z, dx = 1.05, (e - 0.5) * 0.05 * direction
+    elif motion == "hold":                 # feature scene: almost still, labels readable
+        z, dx = 1.0 + 0.03 * e, 0.0
+    else:                                  # end card: settle
+        z, dx = 1.04 - 0.04 * e, 0.0
+    s = base * z
+    ax, ay = W / 2, anchor_y * H
+    tx = out_w / 2 - s * ax + dx * out_w
+    ty = anchor_y * out_h - s * ay
+    return np.float32([[s, 0, tx], [0, s, ty]])
+
+
+def framing_report(img, plate, to_plate, out_w, out_h, motion, anchor_y) -> dict:
+    """Where the whole product lands in the output frame over the shot's motion
+    (v1.5.0): its height as a share of the frame height (smallest over the motion),
+    and whether any part leaves the frame. Recorded in the plan for each shot."""
+    cx, cy, pw, ph = product_box_xywh(img)
+    corners = [to_plate(cx - pw / 2, cy - ph / 2), to_plate(cx + pw / 2, cy + ph / 2)]
+    heights, clipped = [], False
+    for t in (0.0, 0.5, 1.0):
+        M = _matrix(plate.shape[1::-1], out_w, out_h, t, motion, 1, anchor_y)
+        (x0, y0), (x1, y1) = [M @ np.float32([x, y, 1]) for x, y in corners]
+        heights.append((y1 - y0) / out_h)
+        clipped = clipped or x0 < 0 or y0 < 0 or x1 > out_w or y1 > out_h
+    return {"height_frac": round(float(min(heights)), 3), "clipped": bool(clipped)}
+
+
+def _frame(plate, out_w, out_h, M) -> np.ndarray:
+    return cv2.warpAffine(plate, M, (out_w, out_h), flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_REPLICATE)
+
+
+# --------------------------------------------------------------------------- text
+def _font(weight: str, size: int):
+    for name in (f"Poppins-{weight}.ttf", "Poppins-Bold.ttf"):
+        p = FONT_DIR / name
+        if p.exists():
+            return ImageFont.truetype(str(p), size)
+    return ImageFont.load_default(size)
+
+
+def _hex(c: str, default=(31, 58, 99)) -> tuple:
+    try:
+        c = c.lstrip("#")
+        return tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+    except Exception:
+        return default
+
+
+def _wrap(draw, text, f, max_w):
+    """Greedy wrap. Hyphenated words may break after the hyphen."""
+    import re
+    words, lines, cur = re.findall(r"[^\s-]+-|[^\s]+", text), [], ""
+    for w in words:
+        trial = (cur + ("" if cur.endswith("-") else " ") + w).strip()
+        if draw.textlength(trial, font=f) <= max_w:
+            cur = trial
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _fit_lines(draw, text, font_weight, size, max_w, max_lines=2, min_size=22):
+    """Wrap text into at most max_lines, shrinking the font until it fits. If it
+    still does not fit at the smallest size, the last line ends with an ellipsis
+    (the text is never drawn smaller than min_size)."""
+    while size >= min_size:
+        f = _font(font_weight, size)
+        lines = _wrap(draw, text, f, max_w)
+        if len(lines) <= max_lines and all(draw.textlength(l, font=f) <= max_w for l in lines):
+            return f, lines
+        size -= 2
+    f = _font(font_weight, min_size)
+    lines = _wrap(draw, text, f, max_w)[:max_lines]
+    while lines and draw.textlength(lines[-1] + "...", font=f) > max_w and len(lines[-1]) > 1:
+        lines[-1] = lines[-1][:-1]
+    lines[-1] = lines[-1].rstrip() + "..."
+    return f, lines
+
+
+def _pill(layer: Image.Image, text: str, cx: int, top: int, max_w: int, size: int,
+          weight: str, fg, bg, max_lines=2, min_size=22) -> int:
+    """Draw a rounded label centred on cx; returns its bottom y."""
+    d = ImageDraw.Draw(layer)
+    f, lines = _fit_lines(d, text, weight, size, max_w - 2 * int(size * 0.7), max_lines, min_size)
+    lh = int(f.size * 1.25)
+    tw = max(d.textlength(l, font=f) for l in lines)
+    padx, pady = int(f.size * 0.7), int(f.size * 0.45)
+    w, h = int(tw + 2 * padx), int(lh * len(lines) + 2 * pady - (lh - f.size) * 0.6)
+    x0 = int(cx - w / 2)
+    d.rounded_rectangle([x0, top, x0 + w, top + h],
+                        radius=int(h * 0.35 if len(lines) > 1 else h / 2), fill=bg)
+    y = top + pady - int(f.size * 0.12)
+    for l in lines:
+        lw = d.textlength(l, font=f)
+        d.text((cx - lw / 2, y), l, font=f, fill=fg)
+        y += lh
+    return top + h
+
+
+def _text_layer(shot: dict, fmt: str, size_wh, brand) -> Image.Image | None:
+    """The owner's text for one shot, as a transparent layer."""
+    W, H = size_wh
+    _, _, side = SAFE[fmt]
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    max_w = int(W * (1 - 2 * side) * 0.92)
+    white, navy = (255, 255, 255, 255), tuple(brand) + (235,)
+    y = int(H * LAYOUT[fmt]["text_top"])
+    unit = W / 1080
+    kind = shot["kind"]
+    drew = False
+    if kind in ("hook", "angle", "detail"):
+        # The text must end above the product zone; if it would not, the block is
+        # drawn smaller until it does (a kicker plus a two line name can be tall).
+        cy, fill = LAYOUT[fmt][kind]
+        limit = int((cy - fill / 2) * H) - int(10 * unit)
+        for scale in (1.0, 0.9, 0.8, 0.7, 0.6):
+            trial = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            u, y = unit * scale, int(H * LAYOUT[fmt]["text_top"])
+            if kind == "hook" and shot.get("kicker"):
+                y = _pill(trial, shot["kicker"].upper(), W // 2, y, int(max_w * 0.8),
+                          int(30 * u), "Medium", navy[:3] + (255,),
+                          (255, 255, 255, 225), 1, 18) + int(10 * u)
+                drew = True
+            if shot.get("caption"):
+                big = kind == "hook"
+                y = _pill(trial, shot["caption"], W // 2, y, max_w,
+                          int((64 if big else 50) * u), "Bold" if big else "Medium",
+                          white, navy, 2, 18)
+                drew = True
+            layer = trial
+            if y <= limit:
+                break
+    elif kind == "feature" and fmt == "vertical":
+        _pill(layer, "Key features", W // 2, y, max_w, int(44 * unit), "Bold", white, navy, 1)
+        drew = True
+    elif kind == "end":
+        limit = int(H * LAYOUT[fmt].get("end_limit", LAYOUT[fmt]["text_bottom"]))
+        cta = (shot.get("cta") or "") + (" " + shot["contact"] if shot.get("contact") else "")
+        for scale in (1.0, 0.9, 0.8, 0.7, 0.6):
+            trial = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            y = int(H * LAYOUT[fmt]["end_text"])
+            u = unit * scale
+            if shot.get("price"):
+                y = _pill(trial, shot["price"], W // 2, y, max_w, int(84 * u), "Bold", white, navy, 1)
+                y += int(18 * u)
+            if cta.strip():
+                y = _pill(trial, cta.strip(), W // 2, y, max_w, int(42 * u), "Medium",
+                          navy[:3] + (255,), (255, 255, 255, 235), 2)
+                y += int(12 * u)
+            if shot.get("shop"):
+                y = _pill(trial, shot["shop"], W // 2, y, max_w, int(34 * u), "Medium",
+                          (70, 70, 70, 255), (255, 255, 255, 215), 1)
+            layer = trial
+            if y <= limit:
+                break
+        drew = True
+    return layer if drew else None
+
+
+def _composite(frame_bgr: np.ndarray, layer, alpha: float, lift: float = 0.0,
+               at=(0, 0)) -> np.ndarray:
+    """Blend an RGBA layer (PIL image) onto the frame at `at` (x, y)."""
+    if layer is None or alpha <= 0:
+        return frame_bgr
+    arr = np.asarray(layer).astype(np.float32)
+    if lift:
+        arr = np.roll(arr, int(lift), axis=0)
+    x, y = at
+    h, w = arr.shape[:2]
+    H, W = frame_bgr.shape[:2]
+    x0, y0, x1, y1 = max(0, x), max(0, y), min(W, x + w), min(H, y + h)
+    if x0 >= x1 or y0 >= y1:
+        return frame_bgr
+    sub = arr[y0 - y:y1 - y, x0 - x:x1 - x]
+    a = (sub[..., 3:4] / 255.0) * alpha
+    out = frame_bgr if frame_bgr.flags.writeable else frame_bgr.copy()
+    region = out[y0:y1, x0:x1].astype(np.float32)
+    out[y0:y1, x0:x1] = (region * (1 - a) + sub[..., :3][..., ::-1] * a).astype(np.uint8)
+    return out
+
+
+# --------------------------------------------------------------------------- callouts
+def _label_image(text: str, max_w: int, size: int, brand) -> Image.Image:
+    probe = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+    f, lines = _fit_lines(probe, text, "Medium", size, max_w - int(size * 1.2), 3, 28)
+    lh = int(f.size * 1.22)
+    tw = max(probe.textlength(l, font=f) for l in lines)
+    padx, pady = int(f.size * 0.6), int(f.size * 0.4)
+    w, h = int(tw + 2 * padx), int(lh * len(lines) + 2 * pady - (lh - f.size) * 0.6)
+    im = Image.new("RGBA", (w + 4, h + 4), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([2, 2, w + 1, h + 1], radius=int(min(h / 2, f.size * 0.8)),
+                        fill=(255, 255, 255, 240), outline=tuple(brand) + (255,), width=3)
+    y = 2 + pady - int(f.size * 0.12)
+    for l in lines:
+        d.text((2 + padx + (tw - probe.textlength(l, font=f)) / 2, y), l, font=f,
+               fill=tuple(brand) + (255,))
+        y += lh
+    return im
+
+
+def layout_callouts(callouts: list, points_xy: list, fmt: str, size_wh, brand,
+                    product_x=None) -> list:
+    """Place each label in the left or right column, at the height of its feature,
+    without overlapping and inside the text safe band. Returns a list of dicts
+    with the label image, its (x, y), the anchor where the line starts and the
+    index of the feature point."""
+    W, H = size_wh
+    margin = int(W * SAFE[fmt][2] * 0.5)
+    col_w = int(W * LABEL_COLUMN)
+    if product_x is not None:            # use the space the product leaves free
+        free = min(product_x[0], W - product_x[1]) - margin - int(W * 0.03)
+        col_w = int(max(W * LABEL_COLUMN, min(W * 0.36, free)))
+    band_top, band_bot = (int(H * v) for v in LAYOUT[fmt]["label_band"])
+    size = int(40 * W / 1080)
+    items = []
+    for i, (c, (px, py)) in enumerate(zip(callouts, points_xy)):
+        img = _label_image(c["label"], col_w - margin, size, brand)
+        items.append({"i": i, "img": img, "side": "left" if px < W / 2 else "right", "py": py})
+    # balance: never more than two labels in one column when three exist
+    for side, other in (("left", "right"), ("right", "left")):
+        same = [it for it in items if it["side"] == side]
+        if len(same) > 2:
+            far = max(same, key=lambda it: abs(it["py"] - H / 2))
+            far["side"] = other
+    gap = int(16 * W / 1080)
+    for side in ("left", "right"):
+        col = sorted([it for it in items if it["side"] == side], key=lambda it: it["py"])
+        y = band_top
+        for it in col:
+            h = it["img"].height
+            it["y"] = int(min(max(it["py"] - h / 2, y), band_bot - h))
+            y = it["y"] + h + gap
+        # push up if the last ones were clamped at the bottom
+        y = band_bot
+        for it in reversed(col):
+            h = it["img"].height
+            it["y"] = min(it["y"], y - h)
+            y = it["y"] - gap
+        for it in col:
+            w = it["img"].width
+            it["x"] = margin if side == "left" else W - margin - w
+            it["anchor"] = (it["x"] + w if side == "left" else it["x"],
+                            it["y"] + it["img"].height / 2)
+    return items
+
+
+def _draw_callouts(frame: np.ndarray, items: list, pts: list, local: float, brand) -> np.ndarray:
+    bgr = tuple(int(v) for v in brand[::-1])
+    for k, it in enumerate(items):
+        p = _ease((local - 0.35 - 0.40 * k) / 0.40)
+        if p <= 0:
+            continue
+        ax, ay = it["anchor"]
+        px, py = pts[it["i"]]
+        ex, ey = ax + (px - ax) * p, ay + (py - ay) * p
+        a, b = (int(ax), int(ay)), (int(ex), int(ey))
+        cv2.line(frame, a, b, (255, 255, 255), 7, cv2.LINE_AA)
+        cv2.line(frame, a, b, bgr, 3, cv2.LINE_AA)
+        if p >= 0.98:
+            cv2.circle(frame, (int(px), int(py)), 13, (255, 255, 255), -1, cv2.LINE_AA)
+            cv2.circle(frame, (int(px), int(py)), 13, bgr, 4, cv2.LINE_AA)
+        frame = _composite(frame, it["img"], min(1.0, p * 1.4), 0, (it["x"], int(it["y"])))
+    return frame
+
+
+def feature_geometry(img: np.ndarray, callouts: list, fmt: str, brand=(31, 58, 99)) -> dict:
+    """Where the feature scene puts the product, the feature points and the labels.
+    Shared by the renderer and by callout_guard, so the guard judges exactly the
+    layout that would be drawn. Points are taken at the middle of the scene."""
+    W, H = FORMATS[fmt]
+    centre_y, fill_h = LAYOUT[fmt]["feature"]
+    plate, to_plate = _plate(img, W, H, fill_h, centre_y, FEATURE_WIDTH_FILL,
+                             max_upscale=FEATURE_MAX_UPSCALE)
+    ih, iw = img.shape[:2]
+    pp = [to_plate(c["x"] * iw, c["y"] * ih) for c in callouts]
+    M = _matrix(plate.shape[1::-1], W, H, 0.5, "hold", 1, centre_y)
+    mid = [tuple(M @ np.float32([x, y, 1])) for x, y in pp]
+    cx, cy, pw, ph = product_box_xywh(img)
+    x0, y0 = M @ np.float32([*to_plate(cx - pw / 2, cy - ph / 2), 1])
+    x1, y1 = M @ np.float32([*to_plate(cx + pw / 2, cy + ph / 2), 1])
+    items = layout_callouts(callouts, mid, fmt, (W, H), brand, product_x=(x0, x1))
+    return {"plate": plate, "to_plate": to_plate, "pp": pp, "mid": mid, "items": items,
+            "product_box": (float(x0), float(y0), float(x1), float(y1)),
+            "photo_box": (cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2)}
+
+
+def _segments_cross(p1, p2, q1, q2) -> bool:
+    """True if segment p1-p2 properly crosses q1-q2."""
+    def orient(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    d1, d2 = orient(q1, q2, p1), orient(q1, q2, p2)
+    d3, d4 = orient(p1, p2, q1), orient(p1, p2, q2)
+    return d1 * d2 < 0 and d3 * d4 < 0
+
+
+def callout_guard(img: np.ndarray, callouts: list, fmt: str) -> dict:
+    """Decide whether the feature scene may use callouts (v1.1.0, Step 3).
+
+    Rejected, so every feature becomes a caption, if ANY of:
+      a  two feature points are closer than CALLOUT_MIN_SEPARATION of the photo's
+         diagonal (lines converging on one spot, seen on the J6+);
+      b  a leader line crosses another leader line in the rendered layout;
+      c  a feature point lies outside the product box.
+    Returns {"ok", "rule" ("" | "a" | "b" | "c"), "detail"}.
+    """
+    from .settings import CALLOUT_MIN_SEPARATION
+    if not callouts:
+        return {"ok": True, "rule": "", "detail": "no callouts"}
+    ih, iw = img.shape[:2]
+    diag = math.hypot(iw, ih)
+    pts = [(c["x"] * iw, c["y"] * ih) for c in callouts]
+    for i in range(len(pts)):
+        for j in range(i + 1, len(pts)):
+            d = math.hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1]) / diag
+            if d < CALLOUT_MIN_SEPARATION:
+                return {"ok": False, "rule": "a",
+                        "detail": f"'{callouts[i]['label']}' and '{callouts[j]['label']}' "
+                                  f"are {d:.3f} of the photo diagonal apart "
+                                  f"(minimum {CALLOUT_MIN_SEPARATION})."}
+    g = feature_geometry(img, callouts, fmt)
+    bx0, by0, bx1, by1 = g["photo_box"]
+    for c, (x, y) in zip(callouts, pts):
+        if not (bx0 <= x <= bx1 and by0 <= y <= by1):
+            return {"ok": False, "rule": "c",
+                    "detail": f"'{c['label']}' is outside the product box."}
+    lines = [(it["anchor"], g["mid"][it["i"]], it["i"]) for it in g["items"]]
+    for a in range(len(lines)):
+        for b in range(a + 1, len(lines)):
+            if _segments_cross(lines[a][0], lines[a][1], lines[b][0], lines[b][1]):
+                la, lb = callouts[lines[a][2]]["label"], callouts[lines[b][2]]["label"]
+                return {"ok": False, "rule": "b",
+                        "detail": f"The lines to '{la}' and '{lb}' cross."}
+    return {"ok": True, "rule": "", "detail": "callouts are apart, inside the product "
+                                              "and their lines do not cross."}
+
+
+def _transition_frame(a: np.ndarray, b: np.ndarray, p: float, kind: str) -> np.ndarray:
+    """One frame of the transition from `a` to `b` at progress p (0..1).
+
+    "slide": `a` leaves to the left as `b` enters from the right. Every pixel is from
+    one photo or the other, so two frames are never stacked.
+    "fade": a dissolve; at p = 0.5 the two photos are visibly blended."""
+    if kind == "slide":
+        w = a.shape[1]
+        shift = int(w * p)
+        out = np.empty_like(a)
+        out[:, :w - shift] = a[:, shift:]
+        out[:, w - shift:] = b[:, :shift]
+        return out
+    return cv2.addWeighted(a, 1 - p, b, p, 0)
+
+
+# --------------------------------------------------------------------------- build
+MOTION = {"hook": "push", "detail": "deep", "angle": "pan", "feature": "hold", "end": "settle"}
+
+
+def render_plan(plan: dict, image_paths: list, out_path: Path,
+                audio_path: Path | None = None, brand_colour: str = "#1F3A63",
+                ffmpeg_bin: str = "ffmpeg") -> PromoResult:
+    """Render a plan from plan.build_plan. image_paths[i] is the photo for index i."""
+    _t_start = time.perf_counter()  # for additive timing logs (no effect on output)
+    fmt = plan.get("format", "vertical")
+    fmt = fmt if fmt in FORMATS else "vertical"
+    W, H = FORMATS[fmt]
+    mood = plan.get("mood", "upbeat")
+    style = MOOD_STYLE.get(mood, MOOD_STYLE["upbeat"])
+    brand = _hex(brand_colour)
+
+    # Read every photo the plan uses, then bring their backgrounds to one
+    # lightness (normalize.py). These are in-memory COPIES; the certified files
+    # are only read, never written.
+    used = sorted({s["image"] for s in plan["shots"]})
+    loaded = {i: cv2.imread(str(image_paths[i]), cv2.IMREAD_COLOR) for i in used}
+    ok_idx = [i for i in used if loaded[i] is not None]
+    if not ok_idx:
+        raise RuntimeError("None of the images could be read.")
+    hero = next((s["image"] for s in plan["shots"] if s["kind"] == "hook"), ok_idx[0])
+    from .normalize import match_set
+    fixed, norm_records, norm_target = match_set(
+        [loaded[i] for i in ok_idx],
+        main_index=ok_idx.index(hero) if hero in ok_idx else 0)
+    cache = dict(zip(ok_idx, fixed))
+    record = {"normalisation": {"target_bg_l": norm_target,
+                                "images": {str(i): r for i, r in zip(ok_idx, norm_records)}}}
+
+    segs, direction = [], 1
+    for shot in plan["shots"]:
+        kind = shot["kind"]
+        idx = shot["image"]
+        img = cache.get(idx)
+        if img is None:
+            continue
+        centre_y, fill_h = LAYOUT[fmt][kind]
+        if kind == "feature" and shot.get("callouts"):
+            g = feature_geometry(img, shot["callouts"], fmt, brand)
+            plate, to_plate = g["plate"], g["to_plate"]
+        else:
+            wfill = FEATURE_WIDTH_FILL if kind == "feature" else MAX_WIDTH_FILL
+            # Detail and feature shots may not be enlarged as far as the others, so a
+            # small product stays smaller rather than being blurred.
+            cap = {"detail": DETAIL_MAX_UPSCALE, "feature": FEATURE_MAX_UPSCALE,
+                   "end": END_MAX_UPSCALE}.get(kind, MAX_UPSCALE)
+            plate, to_plate = _plate(img, W, H, fill_h, centre_y, wfill, max_upscale=cap)
+            g = None
+        seg = dict(kind=kind, plate=plate, layer=_text_layer(shot, fmt, (W, H), brand),
+                   dur=float(shot["seconds"]), motion=MOTION[kind], direction=direction,
+                   anchor_y=centre_y, image=idx, zone=(centre_y, fill_h),
+                   caption=shot.get("caption", ""),
+                   brand={"kicker": shot.get("kicker", ""), "shop": shot.get("shop", ""),
+                          "contact": shot.get("contact", "")})
+        seg["framing"] = framing_report(img, plate, to_plate, W, H, MOTION[kind], centre_y)
+        if g is not None:
+            seg["pp"], seg["items"] = g["pp"], g["items"]
+        segs.append(seg)
+        if kind == "angle":
+            direction = -direction
+    if not segs:
+        raise RuntimeError("None of the images could be read.")
+
+    tr = style["trans_s"]
+    starts, t = [], 0.0
+    for i, s in enumerate(segs):
+        starts.append(t)
+        t += s["dur"] - (tr if i < len(segs) - 1 else 0)
+    total = t
+    n_frames = int(round(total * FPS))
+
+    def _text_rows(layer):
+        if layer is None:
+            return None
+        a = np.asarray(layer)[..., 3]
+        rows = np.flatnonzero(a.max(axis=1) > 0)
+        return (int(rows.min()), int(rows.max())) if rows.size else None
+
+    # The timeline, so the finished video can be measured (measure.py). Text
+    # fades in from 0.15 s and is fully visible 0.5 s into its shot.
+    record["timeline"] = [
+        {"kind": s["kind"], "image": s["image"], "start": round(starts[i], 3),
+         "end": round(starts[i] + s["dur"], 3), "zone": list(s["zone"]),
+         "caption": s["caption"], "brand": s["brand"],
+         "text_rows": _text_rows(s["layer"]), "framing": s["framing"],
+         "text_visible_at": round(starts[i] + 0.5, 3) if s["layer"] is not None else None}
+        for i, s in enumerate(segs)]
+    record["size"] = [W, H]
+    record["transition_s"] = tr
+
+    cmd = [ffmpeg_bin, "-y", "-loglevel", "error",
+           "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-"]
+    if audio_path is not None:
+        cmd += ["-i", str(audio_path)]
+    cmd += ["-map", "0:v"]
+    if audio_path is not None:
+        fade_out = max(0.0, total - 1.2)
+        cmd += ["-map", "1:a", "-af",
+                f"afade=t=in:st=0:d=0.6,afade=t=out:st={fade_out:.2f}:d=1.2",
+                "-c:a", "aac", "-b:a", "160k"]
+    # x264 starts about 1.5 frame threads per CPU core, each holding 1080x1920
+    # frames: 541 MB on a 12 core laptop (v1.1.0 measurement). A fixed, small
+    # thread count keeps memory predictable on a small server.
+    threads = os.environ.get("PQF_FFMPEG_THREADS", "2")
+    cmd += ["-t", f"{total:.3f}", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-preset", "veryfast", "-crf", "20", "-threads", threads,
+            "-movflags", "+faststart", str(out_path)]
+
+    _t_prep = time.perf_counter()  # preparation done; the frame loop starts now
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    err = ""
+    # Additive timing: time spent generating frames in Python vs. blocked writing
+    # them to ffmpeg's stdin (ffmpeg back-pressure, i.e. the encode). Logged only.
+    _gen_s = 0.0
+    _write_s = 0.0
+    try:
+        for f in range(n_frames):
+            _g0 = time.perf_counter()
+            now = f / FPS
+            active = [i for i, st in enumerate(starts) if st <= now < st + segs[i]["dur"]]
+            if not active:
+                active = [len(segs) - 1]
+            frames = []
+            for i in active:
+                s = segs[i]
+                local = now - starts[i]
+                M = _matrix(s["plate"].shape[1::-1], W, H, local / s["dur"], s["motion"],
+                            s["direction"], s["anchor_y"])
+                fr = _frame(s["plate"], W, H, M)
+                a_in = min(1.0, max(0.0, (local - 0.15) / 0.35))
+                fr = _composite(fr, s["layer"], a_in, (1 - _ease(a_in)) * 24)
+                if s.get("items"):
+                    pts = [tuple(M @ np.float32([x, y, 1])) for x, y in s["pp"]]
+                    fr = _draw_callouts(fr, s["items"], pts, local, brand)
+                frames.append((i, local, fr))
+            if len(frames) == 1:
+                out = frames[0][2]
+            else:
+                (_, _, a), (_, lb, b) = frames[0], frames[-1]
+                out = _transition_frame(a, b, _ease(min(1.0, lb / tr)), style["transition"])
+            _g1 = time.perf_counter()
+            proc.stdin.write(np.ascontiguousarray(out).tobytes())
+            _g2 = time.perf_counter()
+            _gen_s += _g1 - _g0
+            _write_s += _g2 - _g1
+        proc.stdin.close()
+        err = proc.stderr.read().decode(errors="ignore")
+        proc.wait(timeout=300)
+    except Exception:
+        proc.kill()
+        raise
+    if proc.returncode != 0 or not Path(out_path).exists():
+        raise RuntimeError(f"Video assembly failed. {err[-800:]}")
+
+    # Additive timing summary. prep = reading/normalising photos and building
+    # segments; frame_gen = Python per-frame compositing; encode = time blocked
+    # on ffmpeg's stdin (its encoding). None of this changes the output.
+    _now = time.perf_counter()
+    timing = {
+        "prep_ms": round((_t_prep - _t_start) * 1000),
+        "frame_gen_ms": round(_gen_s * 1000),
+        "encode_ms": round(_write_s * 1000),
+        "render_total_ms": round((_now - _t_start) * 1000),
+        "frames": n_frames,
+        "size": [W, H],
+        "fps": FPS,
+    }
+    record["timing"] = timing
+    logging.getLogger("pqf.video").info(
+        "render timing: total=%dms prep=%dms frame_gen=%dms encode=%dms "
+        "(%d frames @ %dx%d %dfps, %.1fms/frame)",
+        timing["render_total_ms"], timing["prep_ms"], timing["frame_gen_ms"],
+        timing["encode_ms"], n_frames, W, H, FPS,
+        timing["render_total_ms"] / max(1, n_frames))
+    return PromoResult(Path(out_path), round(total, 1), len(cache), fmt,
+                       audio_path is not None, mood, record)

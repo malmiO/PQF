@@ -1,0 +1,9 @@
+Recalibration after the product-region fix
+images used              52
+product-region variance  min 20.0  median 273.4  max 10474.8
+p90                     4447.3
+
+SUGGESTED  CALIBRATED_SHARPNESS_SMAX = 4447.3
+
+Set this in config.py, then re-run the test suite and the pipeline check.
+Record the change and the reason in your decision log.

@@ -1,0 +1,27 @@
+================================================================
+PQF Phase B — Calibration (calibration split ONLY)
+================================================================
+Calibration images listed: 52
+Holdout images listed:     65  (NOT used here)
+
+Good calibration images used:  29
+  degraded (skipped):          23
+  missing on disk:             0
+  T6 abstained (no neutral):   2
+
+T1 — Sharpness (raw Laplacian variance over good calibration images)
+  min/median/max: 54.0 / 471.8 / 3936.0
+  p90 (suggested S_MAX): 2057.0
+
+T6 — Colour-cast (raw magnitude in neutral region, good images)
+  min/median/max: 0.00 / 0.02 / 2.83
+  p90 (suggested C_MAX, min 5.0): 5.00
+  NOTE: dataset has no dedicated cast-violation images (logged
+        limitation) — this calibrates the SCALE, not detection accuracy.
+
+----------------------------------------------------------------
+PASTE THESE INTO backend/pqf/config.py (then log in decisions.md):
+  CALIBRATED_SHARPNESS_SMAX = 2057.0
+  CALIBRATED_COLORCAST_CMAX = 5.00
+----------------------------------------------------------------
+Holdout was not read. Calibration is complete.

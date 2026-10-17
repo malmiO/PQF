@@ -1,0 +1,136 @@
+/// The guided shot sequence.
+///
+/// WHY THIS EXISTS. The quality gate requires a set with coverage, meaning at
+/// least one main shot, at least two angles and at least one detail shot. A
+/// user who does not know that takes five near identical front views and the
+/// set is rejected after they have finished, which is a poor experience and
+/// teaches them nothing.
+///
+/// Encoding the gate's requirements as a sequence turns that failure into
+/// something the app prevents rather than reports, and it teaches the coverage
+/// a listing actually needs. The instructions themselves carry the photographic
+/// knowledge the framework exists to transfer.
+class ShotStep {
+  /// Short label shown in the progress strip.
+  final String label;
+
+  /// What to do, in one line, written for someone with no photography training.
+  final String instruction;
+
+  /// A short reason. Users follow guidance more reliably when they know why.
+  final String why;
+
+  /// The role this shot is intended to satisfy in the quality gate. Used only
+  /// for reporting. The framework classifies the image on its own evidence and
+  /// is never told what role was intended.
+  final String intendedRole;
+
+  const ShotStep({
+    required this.label,
+    required this.instruction,
+    required this.why,
+    required this.intendedRole,
+  });
+
+  /// The shot type sent to POST /guidance (main | angle | detail | extra), so
+  /// live guidance applies the right per shot framing. Derived from the
+  /// intended role; it never tells the framework what role to assign.
+  String get shotType {
+    switch (intendedRole) {
+      case 'hero_shot':
+        return 'main';
+      case 'angle_shot':
+        return 'angle';
+      case 'detail_shot':
+        return 'detail';
+      default:
+        return 'extra';
+    }
+  }
+}
+
+class ShotPlan {
+  /// Four required shots plus one optional, which satisfies a gate requiring
+  /// one main shot, two angles, one detail, and a set of four to six images.
+  static const List<ShotStep> steps = [
+    ShotStep(
+      label: 'Main',
+      instruction: 'Place the product in the centre, facing you, and fill the box.',
+      why: 'This becomes the first photo a customer sees.',
+      intendedRole: 'hero_shot',
+    ),
+    ShotStep(
+      label: 'Angle 1',
+      instruction: 'Turn the product about halfway to one side.',
+      why: 'A second view shows shape and depth that a front view hides.',
+      intendedRole: 'angle_shot',
+    ),
+    ShotStep(
+      label: 'Angle 2',
+      instruction: 'Now show the other side, or the back.',
+      why: 'Customers ask what the other side looks like. Answer it in advance.',
+      intendedRole: 'angle_shot',
+    ),
+    ShotStep(
+      label: 'Detail',
+      instruction: 'Fill the frame with one feature, close up - not the whole '
+          'product or its card.',
+      why: 'Close detail is what convinces someone the quality is real.',
+      intendedRole: 'detail_shot',
+    ),
+    ShotStep(
+      label: 'Extra',
+      instruction: 'One more if you want. Any view you think helps.',
+      why: 'Optional. You can finish now instead.',
+      intendedRole: 'any',
+    ),
+  ];
+
+  /// Shots below this index must be taken before finishing.
+  static const int requiredCount = 4;
+
+  static ShotStep at(int index) =>
+      steps[index.clamp(0, steps.length - 1)];
+
+  static bool isOptional(int index) => index >= requiredCount;
+
+  static bool isComplete(int captured) => captured >= requiredCount;
+
+  /// Confirmation shown immediately after a capture, before the next
+  /// instruction. Brief, because the user wants to keep moving. [plan] and
+  /// [required] default to the full sequence.
+  static String confirmation(int justCaptured,
+      {List<ShotStep> plan = steps, int required = requiredCount}) {
+    if (justCaptured >= plan.length) return 'That is everything. Well done.';
+    if (justCaptured == required) {
+      return 'You have everything you need. Finish now, or take one more.';
+    }
+    return 'Got it. Next, ${plan[justCaptured].label.toLowerCase()}.';
+  }
+
+  /// A plan of ONLY the shots the server says are missing, in the order
+  /// main, angles, detail, reusing the step texts above for each role. [missing]
+  /// is a list of (role, count). Every step is required; there is no extra.
+  static List<ShotStep> forMissing(List<(String, int)> missing) {
+    final plan = <ShotStep>[];
+    for (final role in const ['hero_shot', 'angle_shot', 'detail_shot']) {
+      final count = missing
+          .where((m) => m.$1 == role)
+          .fold<int>(0, (sum, m) => sum + m.$2);
+      if (count <= 0) continue;
+      final texts = steps.where((s) => s.intendedRole == role).toList();
+      for (var i = 0; i < count; i++) {
+        final s = texts[i % texts.length];
+        plan.add(count == 1 && role == 'angle_shot'
+            // One angle: "Angle 1" would suggest a second is coming.
+            ? ShotStep(
+                label: 'Angle',
+                instruction: s.instruction,
+                why: s.why,
+                intendedRole: s.intendedRole)
+            : s);
+      }
+    }
+    return plan;
+  }
+}

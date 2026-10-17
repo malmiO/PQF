@@ -10,19 +10,32 @@ data/splits/*
 __pycache__/
 *.pyc
 .venv/
+.venv-eval/
 venv/
 *.egg-info/
 
 # Secrets — API keys must never be committed
 .env
+*.env
 *.key
 backend/api/secrets.py
 
 # Flutter
-mobile/
+
 mobile/.dart_tool/
 mobile/build/
 mobile/.flutter-plugins*
+mobile/.packages
+mobile/.flutter-plugins-dependencies
+mobile/.flutter-plugins
+mobile/ios/
+mobile/.idea/
+mobile/web/
+mobile/macOS/
+mobile/linux/
+mobile/windows/
+mobile/assets/config.env
+mobile/assets/
 
 # OS / editor
 .DS_Store
@@ -30,7 +43,7 @@ mobile/.flutter-plugins*
 .vscode/
 *.bak
 
-backend/
+
 data/
 docs/
 
@@ -45,3 +58,83 @@ data/splits/*
 backend/api/secrets.py
 __pycache__/
 node_modules/
+
+diagnose_gemini.py
+
+# Flutter
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Repo hygiene (added 2026-10-03). 
+**/config.env
+*.bak_*
+*backup*/
+pqf_fixes_*.zip
+.pytest_cache/
+test-img/
+
+backend/assets/music/test_*.mp3
+
+# PQF hygiene 2026-10-05
+pqf_update_*.zip
+pqf_fixes_*/
+pqf_update_*/
+apply_fixes_*.py
+*.mp4
+Thumbs.db
+
+research/results/study_log.jsonl
+research/results/study_export*.csv
+test-img/review/
+# Kotlin compiler crash logs
+mobile/android/.kotlin/
+
+study_log.jsonl
+PQF_Build_Pack_v1.4/
+research/results/formative_synthetic_2026-10-08/
+DEPLOY.md
+
+# Controlled synthetic faults (3.6 GB of lossless PNG, 2026-10-11). Reproducible: the generator
+# is research/evaluation/synthetic_faults.py (seeded) and manifest.csv records every fault.
+# Only the manifest is committed; the image folders (BLUR_L1, DARK_L2, ...) are not.
+research/results/synthetic/*/
+small.jpg
+key.properties
+source/
+# Blind rating app (2026-10-16): participants' product photos, keys and answers must never reach git
+research/rating_app/rating_data/
+research/rating_app/rating_private/
+research/rating_app/backups/
+research/rating_app/exports/
+research/rating_app/ratings.db
+research/rating_app/ratings.db-wal
+research/rating_app/ratings.db-shm
+research/rating_app/responses_backup.csv
+research/rating_app/.streamlit/secrets.toml
+research/results/dryrun/
+
+# Human cross-check banks (2026-10-16): holdout pair key, own-set scores, candidate photo lists
+research/results/crosscheck/
+
+research/results/
+research/devices/
+research/rating_app/rating_private/
+research/results/ai_judges/
+research/results/o1_holdout/
+research/rating_app/
+
+mobile/android/
+mobile/android/key.properties
+mobile/android/.gitignore:12:key.properties
+
+mobile/linux/flutter
+mobile/macos/Flutter
+mobile/windows/flutter
