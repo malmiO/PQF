@@ -57,20 +57,24 @@ FEATURE_BASE, FEATURE_EACH = 1.6, 0.8     # feature scene: time to read each lab
 # LAYOUT. Text and product never share space. Per format: where the text band
 # starts, and per shot kind the product's (centre_y, height fraction).
 LAYOUT = {
-    "vertical": {"text_top": 0.150, "end_text": 0.440, "text_bottom": 0.645,
-                 "label_band": (0.215, 0.645),
+    "vertical": {"text_top": 0.150, "end_text": 0.150, "text_bottom": 0.645,
+                 "label_band": (0.215, 0.80),
                  "hook": (0.54, 0.46), "angle": (0.54, 0.44), "detail": (0.55, 0.56),
-                 "feature": (0.43, 0.34), "end": (0.28, 0.26)},
+                 # v1.5.0 (2026-10-17): the key features card was 34 % and the end card 26 %
+                 # of the frame height (the product read small). Feature card 60 %; the
+                 # end card is now text on top (price, call to action, shop, all inside
+                 # the 14-65 % safe band) and the product at 50 % below it.
+                 "feature": (0.505, 0.60), "end": (0.63, 0.50), "end_limit": 0.36},
     # text_top was 0.065 and text_bottom 0.935, both outside SAFE's 7 % margins;
     # found by the measured checklist (v1.1.0) and moved inside them
     "square":   {"text_top": 0.075, "end_text": 0.615, "text_bottom": 0.925,
                  "label_band": (0.17, 0.93),
                  "hook": (0.575, 0.62), "angle": (0.575, 0.60), "detail": (0.58, 0.70),
-                 "feature": (0.55, 0.60), "end": (0.315, 0.44)},
+                 "feature": (0.55, 0.60), "end": (0.31, 0.50), "end_limit": 0.925},
 }
 MAX_WIDTH_FILL = 0.86      # product never wider than this share of the frame
-FEATURE_WIDTH_FILL = 0.40  # feature scene: room for label columns on both sides
-LABEL_COLUMN = 0.235       # width share of each label column
+FEATURE_WIDTH_FILL = 0.60  # feature scene: room for label columns on both sides
+LABEL_COLUMN = 0.20        # width share of each label column
 MAX_UPSCALE = 2.4          # never enlarge a photo more than this
 
 # Detail and feature shots (v1.4.0, 2026-10-11). The detail shot is an already cropped
@@ -78,6 +82,8 @@ MAX_UPSCALE = 2.4          # never enlarge a photo more than this
 # product up to about 2.7 times and read soft. For these two shots a small product now
 # stays smaller instead of being blurred, and the push itself is capped.
 DETAIL_MAX_UPSCALE = 1.5   # source -> frame enlargement allowed for detail / feature
+FEATURE_MAX_UPSCALE = 3.6  # v1.5.0: the feature card may enlarge as far as hook and angle
+END_MAX_UPSCALE = 3.0      # v1.5.0: so the end card can reach 50 % of the frame height
 DETAIL_PUSH_MAX = 1.3      # the motion never enlarges the plate more than this
 
 # WHOLE-PRODUCT framing (v1.4.0, 2026-10-11). pipeline.views.product_box returns ONE
@@ -258,6 +264,21 @@ def _matrix(plate_wh, out_w, out_h, t, motion, direction, anchor_y) -> np.ndarra
     return np.float32([[s, 0, tx], [0, s, ty]])
 
 
+def framing_report(img, plate, to_plate, out_w, out_h, motion, anchor_y) -> dict:
+    """Where the whole product lands in the output frame over the shot's motion
+    (v1.5.0): its height as a share of the frame height (smallest over the motion),
+    and whether any part leaves the frame. Recorded in the plan for each shot."""
+    cx, cy, pw, ph = product_box_xywh(img)
+    corners = [to_plate(cx - pw / 2, cy - ph / 2), to_plate(cx + pw / 2, cy + ph / 2)]
+    heights, clipped = [], False
+    for t in (0.0, 0.5, 1.0):
+        M = _matrix(plate.shape[1::-1], out_w, out_h, t, motion, 1, anchor_y)
+        (x0, y0), (x1, y1) = [M @ np.float32([x, y, 1]) for x, y in corners]
+        heights.append((y1 - y0) / out_h)
+        clipped = clipped or x0 < 0 or y0 < 0 or x1 > out_w or y1 > out_h
+    return {"height_frac": round(float(min(heights)), 3), "clipped": bool(clipped)}
+
+
 def _frame(plate, out_w, out_h, M) -> np.ndarray:
     return cv2.warpAffine(plate, M, (out_w, out_h), flags=cv2.INTER_LINEAR,
                           borderMode=cv2.BORDER_REPLICATE)
@@ -372,7 +393,7 @@ def _text_layer(shot: dict, fmt: str, size_wh, brand) -> Image.Image | None:
         _pill(layer, "Key features", W // 2, y, max_w, int(44 * unit), "Bold", white, navy, 1)
         drew = True
     elif kind == "end":
-        limit = int(H * LAYOUT[fmt]["text_bottom"])
+        limit = int(H * LAYOUT[fmt].get("end_limit", LAYOUT[fmt]["text_bottom"]))
         cta = (shot.get("cta") or "") + (" " + shot["contact"] if shot.get("contact") else "")
         for scale in (1.0, 0.9, 0.8, 0.7, 0.6):
             trial = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -509,7 +530,7 @@ def feature_geometry(img: np.ndarray, callouts: list, fmt: str, brand=(31, 58, 9
     W, H = FORMATS[fmt]
     centre_y, fill_h = LAYOUT[fmt]["feature"]
     plate, to_plate = _plate(img, W, H, fill_h, centre_y, FEATURE_WIDTH_FILL,
-                             max_upscale=DETAIL_MAX_UPSCALE)
+                             max_upscale=FEATURE_MAX_UPSCALE)
     ih, iw = img.shape[:2]
     pp = [to_plate(c["x"] * iw, c["y"] * ih) for c in callouts]
     M = _matrix(plate.shape[1::-1], W, H, 0.5, "hold", 1, centre_y)
@@ -632,13 +653,14 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
         centre_y, fill_h = LAYOUT[fmt][kind]
         if kind == "feature" and shot.get("callouts"):
             g = feature_geometry(img, shot["callouts"], fmt, brand)
-            plate = g["plate"]
+            plate, to_plate = g["plate"], g["to_plate"]
         else:
             wfill = FEATURE_WIDTH_FILL if kind == "feature" else MAX_WIDTH_FILL
             # Detail and feature shots may not be enlarged as far as the others, so a
             # small product stays smaller rather than being blurred.
-            cap = DETAIL_MAX_UPSCALE if kind in ("detail", "feature") else MAX_UPSCALE
-            plate, _ = _plate(img, W, H, fill_h, centre_y, wfill, max_upscale=cap)
+            cap = {"detail": DETAIL_MAX_UPSCALE, "feature": FEATURE_MAX_UPSCALE,
+                   "end": END_MAX_UPSCALE}.get(kind, MAX_UPSCALE)
+            plate, to_plate = _plate(img, W, H, fill_h, centre_y, wfill, max_upscale=cap)
             g = None
         seg = dict(kind=kind, plate=plate, layer=_text_layer(shot, fmt, (W, H), brand),
                    dur=float(shot["seconds"]), motion=MOTION[kind], direction=direction,
@@ -646,6 +668,7 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
                    caption=shot.get("caption", ""),
                    brand={"kicker": shot.get("kicker", ""), "shop": shot.get("shop", ""),
                           "contact": shot.get("contact", "")})
+        seg["framing"] = framing_report(img, plate, to_plate, W, H, MOTION[kind], centre_y)
         if g is not None:
             seg["pp"], seg["items"] = g["pp"], g["items"]
         segs.append(seg)
@@ -675,7 +698,7 @@ def render_plan(plan: dict, image_paths: list, out_path: Path,
         {"kind": s["kind"], "image": s["image"], "start": round(starts[i], 3),
          "end": round(starts[i] + s["dur"], 3), "zone": list(s["zone"]),
          "caption": s["caption"], "brand": s["brand"],
-         "text_rows": _text_rows(s["layer"]),
+         "text_rows": _text_rows(s["layer"]), "framing": s["framing"],
          "text_visible_at": round(starts[i] + 0.5, 3) if s["layer"] is not None else None}
         for i, s in enumerate(segs)]
     record["size"] = [W, H]

@@ -1,15 +1,11 @@
 import 'package:flutter/material.dart';
-import '../config/api_config.dart';
-import '../models/api_result.dart';
 import '../services/pqf_api.dart';
 import '../widgets/error_view.dart';
 import '../widgets/help_sheet.dart';
 import '../models/study_session.dart';
-import 'onboarding_screen.dart';
 import 'product_form_screen.dart';
-import 'business_profile_screen.dart';
+import 'profile_screen.dart';
 import 'study_screens.dart';
-import 'about_screen.dart';
 
 /// Entry point. Kept deliberately short, because every screen before the camera
 /// is a screen between the seller and the thing they came to do.
@@ -43,6 +39,16 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  void _start(CaptureStart start) => Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => ProductFormScreen(start: start)));
+
+  /// Opens study mode. The long press on the title
+  /// come here: openStudyMode asks for the PIN, and opens nothing without it.
+  Future<void> _joinStudy() async {
+    await openStudyMode(context);
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -61,99 +67,87 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Align(
-                          alignment: Alignment.topRight,
-                          child: HelpButton(HelpTopic.home),
-                        ),
-                        // A long press opens study mode (PIN protected), so
-                        // participants never come across it (v1.1.0).
-                        GestureDetector(
-                          onLongPress: () async {
-                            await openStudyMode(context);
-                            if (mounted) setState(() {});
-                          },
-                          child: const Text('Product Photo Assistant',
-                              style: TextStyle(
-                                  fontSize: 27, fontWeight: FontWeight.bold)),
+                        Row(
+                          children: [
+                            Expanded(
+                              // A long press opens study mode (PIN protected). Study mode
+                              // has no visible button in v1.5.0.
+                              child: GestureDetector(
+                                onLongPress: _joinStudy,
+                                child: const Text('Éclat',
+                                    style: TextStyle(
+                                        fontSize: 30, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                            const HelpButton(HelpTopic.home),
+                          ],
                         ),
                         if (StudySession.current != null)
                           Padding(
-                            padding: const EdgeInsets.only(top: 6),
+                            padding: const EdgeInsets.only(top: 2),
                             child: Text(
                                 'Session ${StudySession.current!.participant}',
                                 style: TextStyle(
                                     fontSize: 12, color: Colors.grey.shade600)),
                           ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 6),
                         Text(
-                          'Take product photos that are ready to post. '
-                          'The app checks each shot as you take it.',
+                          'What would you like to do?',
                           style: TextStyle(
-                              fontSize: 15.5,
-                              color: Colors.grey.shade700,
-                              height: 1.4),
+                              fontSize: 16, color: Colors.grey.shade700, height: 1.4),
                         ),
-                        const SizedBox(height: 30),
+                        const SizedBox(height: 18),
                         _ServerStatus(
                           checking: _checking,
                           up: _serverUp,
                           failure: _failure,
                           onRetry: _checkServer,
                         ),
-                        const Expanded(child: SizedBox(height: 24)),
-                        FilledButton(
-                          // Full width here specifically, rather than globally.
-                          style: FilledButton.styleFrom(
-                              minimumSize: const Size.fromHeight(52)),
-                          onPressed: _serverUp == true
-                              ? () => Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => const ProductFormScreen(),
-                                    ),
-                                  )
+                        const SizedBox(height: 18),
+                        _HomeCard(
+                          icon: Icons.camera_alt_outlined,
+                          title: 'Guided capture',
+                          subtitle: 'Take photos with live guidance, one shot at a time.',
+                          accent: const Color(0xFF1F3A63),
+                          onTap: _serverUp == true
+                              ? () => _start(CaptureStart.guided)
                               : null,
-                          child: const Text('New product'),
                         ),
-                        const SizedBox(height: 14),
-                        Text(
-                          'Tip. Use a plain white or light surface, and natural '
-                          'light from a window rather than overhead lighting.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.grey.shade600,
-                              height: 1.4),
-                        ),
-                        const SizedBox(height: 4),
-                        OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                              minimumSize: const Size.fromHeight(48)),
-                          onPressed: () =>
-                              Navigator.of(context).push(MaterialPageRoute(
-                            builder: (_) => const BusinessProfileScreen(),
-                          )),
-                          icon: const Icon(Icons.storefront_outlined, size: 20),
-                          label: const Text('My shop'),
-                        ),
-                        const SizedBox(height: 4),
-                        Wrap(
-                          alignment: WrapAlignment.center,
+                        // The study compares camera conditions only.
+                        if (StudySession.current == null) ...[
+                          const SizedBox(height: 14),
+                          _HomeCard(
+                            icon: Icons.photo_library_outlined,
+                            title: 'Upload & check',
+                            subtitle: 'Check photos you already have and get your best set.',
+                            accent: const Color(0xFF2E7D32),
+                            onTap: _serverUp == true
+                                ? () => _start(CaptureStart.upload)
+                                : null,
+                          ),
+                        ],
+                        const Expanded(child: SizedBox(height: 16)),
+                        Row(
                           children: [
-                            TextButton.icon(
-                              onPressed: () =>
-                                  Navigator.of(context).push(MaterialPageRoute(
-                                builder: (_) => const OnboardingScreen(),
-                              )),
-                              icon: const Icon(Icons.help_outline, size: 18),
-                              label: const Text('How it works'),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                    minimumSize: const Size.fromHeight(50)),
+                                onPressed: () => Navigator.of(context).push(
+                                    MaterialPageRoute(builder: (_) => const ProfileScreen())),
+                                icon: const Icon(Icons.person_outline, size: 20),
+                                label: const Text('Profile'),
+                              ),
                             ),
-                            TextButton.icon(
-                              onPressed: () =>
-                                  Navigator.of(context).push(MaterialPageRoute(
-                                builder: (_) => const AboutScreen(),
-                              )),
-                              icon: const Icon(Icons.info_outline, size: 18),
-                              label: const Text('About'),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                    minimumSize: const Size.fromHeight(50)),
+                                onPressed: () => showHelpSheet(context, HelpTopic.home),
+                                icon: const Icon(Icons.help_outline, size: 20),
+                                label: const Text('Help'),
+                              ),
                             ),
                           ],
                         ),
@@ -165,6 +159,63 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color accent;
+  final VoidCallback? onTap;
+
+  const _HomeCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.accent,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      enabled: onTap != null,
+      label: '$title. $subtitle',
+      excludeSemantics: true,
+      child: Material(
+        color: onTap == null ? Colors.grey.shade600 : accent,
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: onTap,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 132),
+            padding: const EdgeInsets.all(20),
+            child: Row(children: [
+              Icon(icon, size: 46, color: Colors.white),
+              const SizedBox(width: 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                            fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
+                    const SizedBox(height: 6),
+                    Text(subtitle,
+                        style: const TextStyle(fontSize: 14.5, color: Colors.white, height: 1.35)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: Colors.white),
+            ]),
+          ),
         ),
       ),
     );

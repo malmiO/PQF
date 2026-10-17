@@ -3,8 +3,8 @@
 /// Kept in step with `version:` in pubspec.yaml by hand. There is no
 /// package_info plugin, so bump BOTH when the pubspec version changes.
 class AppInfo {
-  static const String version = '1.0.0';
-  static const String build = '1';
+  static const String version = '1.5.0';
+  static const String build = '3';
 
   /// Product name and tagline shown on the About screen.
   static const String name = 'Éclat';

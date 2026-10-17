@@ -112,7 +112,7 @@ class _ModeCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: accent.withOpacity(0.35), width: 1.4),
+          border: Border.all(color: accent.withValues(alpha: 0.35), width: 1.4),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -122,7 +122,7 @@ class _ModeCard extends StatelessWidget {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: accent.withOpacity(0.10),
+                  color: accent.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(icon, color: accent, size: 24),

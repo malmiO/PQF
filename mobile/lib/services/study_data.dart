@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
 import 'package:flutter/foundation.dart';
@@ -17,7 +16,7 @@ import 'study_log.dart';
 ///
 /// Layout under the app's private folder (the same `study/` folder as study_log.jsonl):
 ///   study/study_log.jsonl
-///   study/photos/<participant>_<condition>/<sha256>.jpg
+///   study/photos/`<participant>_<condition>`/`<sha256>`.jpg
 ///
 /// Everything here is a no-op outside study mode, and nothing here throws: a storage
 /// problem must never stop a participant's session (the same rule as StudyLog.log).
@@ -147,35 +146,90 @@ class StudyData {
     return zip;
   }
 
-  /// Where the export goes: Downloads/PQF/study on the shared storage, falling back
-  /// to the app's external folder when Android refuses (the caller reports which).
-  static Future<({Directory dir, bool shared})> exportFolder() async {
+  /// Where the export is written (fixed 2026-10-15).
+  ///
+  /// The app's OWN folder on external storage,
+  ///   /storage/emulated/0/Android/data/com.eclat.pqf/files/PQF/study
+  /// which needs no storage permission on any Android version, and which the researcher
+  /// can `adb pull` (also reachable as /sdcard/Android/data/...). It is probed with a real
+  /// write, not only a mkdir.
+  ///
+  /// The previous version wrote to /sdcard/Download/PQF/study. On Android 10 with
+  /// scoped storage that folder is writable only once WRITE_EXTERNAL_STORAGE has been
+  /// granted at run time, and the app never asks for it for the study. A folder left by
+  /// an earlier install made `create()` succeed (it already existed), so the failure only
+  /// appeared when the zip file itself was opened for writing: "Export failed".
+  ///
+  /// [adbReachable] is false only in the last resort (the app's private documents
+  /// folder, which a release build does not expose to adb): the caller must say so.
+  static Future<({Directory dir, bool adbReachable})> exportFolder() async {
     try {
       final ext = await getExternalStorageDirectory();
       if (ext != null) {
-        final i = ext.path.indexOf('/Android/');
-        if (i > 0) {
-          final d = Directory('${ext.path.substring(0, i)}/Download/PQF/study');
-          await d.create(recursive: true);
-          return (dir: d, shared: true);
-        }
+        final d = Directory('${ext.path}/PQF/study');
+        await d.create(recursive: true);
+        if (await canWrite(d)) return (dir: d, adbReachable: true);
       }
     } catch (e) {
-      debugPrint('[study] Downloads folder not writable: $e');
+      debugPrint('[study] app external folder not writable: $e');
     }
-    final base = await getExternalStorageDirectory() ??
-        await getApplicationDocumentsDirectory();
-    final d = Directory('${base.path}/PQF/study');
+    final base = await getApplicationDocumentsDirectory();
+    final d = Directory('${base.path}/export');
     await d.create(recursive: true);
-    return (dir: d, shared: false);
+    return (dir: d, adbReachable: false);
   }
 
-  /// Exports to Downloads/PQF/study. Returns the zip and whether it is in the shared
-  /// Downloads folder (false = the app's own folder, which the caller must say).
-  static Future<({File zip, bool shared})> export([Directory? studyFolder]) async {
-    final out = await exportFolder();
-    final zip = await buildZip(studyFolder: studyFolder, outDir: out.dir);
-    return (zip: zip, shared: out.shared);
+  /// True when a file can really be created and removed in [dir].
+  static Future<bool> canWrite(Directory dir) async {
+    try {
+      final probe = File('${dir.path}/.write_probe');
+      await probe.writeAsBytes(const [0x50, 0x51, 0x46], flush: true);
+      await probe.delete();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// A cheap completeness check: a finished zip ends with the end-of-central-directory
+  /// record (PK 05 06). Catches a half-written file without reading all the photos.
+  static Future<bool> isCompleteZip(File zip) async {
+    try {
+      final len = await zip.length();
+      if (len < 22) return false;
+      final raf = await zip.open();
+      try {
+        await raf.setPosition(len - 22);
+        final tail = await raf.read(22);
+        return tail.length == 22 &&
+            tail[0] == 0x50 && tail[1] == 0x4B && tail[2] == 0x05 && tail[3] == 0x06;
+      } finally {
+        await raf.close();
+      }
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Exports one zip and checks that it was written completely. Returns the zip and
+  /// whether it is in a folder `adb pull` can reach (see [exportFolder]).
+  /// [outDir] is for tests; production passes nothing.
+  static Future<({File zip, bool adbReachable})> export(
+      [Directory? studyFolder, Directory? outDir]) async {
+    var reachable = true;
+    Directory dir;
+    if (outDir != null) {
+      dir = outDir;
+    } else {
+      final out = await exportFolder();
+      dir = out.dir;
+      reachable = out.adbReachable;
+    }
+    final zip = await buildZip(studyFolder: studyFolder, outDir: dir);
+    if (!await isCompleteZip(zip)) {
+      throw StateError('The export zip was not written completely: ${zip.path}');
+    }
+    return (zip: zip, adbReachable: reachable);
   }
 
   /// Removes the study log and every saved photo from this phone.

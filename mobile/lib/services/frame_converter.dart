@@ -75,9 +75,9 @@ class FrameConverter {
         var g = (yv - 0.344136 * uv - 0.714136 * vv).round();
         var b = (yv + 1.772 * uv).round();
 
-        if (r < 0) r = 0; else if (r > 255) r = 255;
-        if (g < 0) g = 0; else if (g > 255) g = 255;
-        if (b < 0) b = 0; else if (b > 255) b = 255;
+        r = r.clamp(0, 255);
+        g = g.clamp(0, 255);
+        b = b.clamp(0, 255);
 
         out.setPixelRgb(tx, ty, r, g, b);
       }

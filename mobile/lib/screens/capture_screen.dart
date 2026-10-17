@@ -1,12 +1,10 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 
-import '../models/api_result.dart';
 import '../models/auto_zoom.dart';
 import '../models/shot_plan.dart';
 import '../services/pqf_api.dart';
@@ -129,6 +127,28 @@ class _CaptureScreenState extends State<CaptureScreen>
   /// hung conversion or request freezes guidance permanently, which is exactly
   /// what happened before the converter was made cheap enough to finish.
   Timer? _watchdog;
+
+  /// v1.5.0: brightness and zoom live in a slim "Adjust" panel that hides itself
+  /// 3 s after the last touch, so the preview stays clear.
+  bool _adjustOpen = false;
+  Timer? _adjustTimer;
+  static const Duration panelAutoHide = Duration(seconds: 3);
+
+  void _touchAdjust() {
+    _adjustTimer?.cancel();
+    _adjustTimer = Timer(panelAutoHide, () {
+      if (mounted) setState(() => _adjustOpen = false);
+    });
+  }
+
+  void _toggleAdjust() {
+    setState(() => _adjustOpen = !_adjustOpen);
+    if (_adjustOpen) {
+      _touchAdjust();
+    } else {
+      _adjustTimer?.cancel();
+    }
+  }
   static const Duration watchdogTimeout = Duration(seconds: 6);
 
   final List<Uint8List> _captured = [];
@@ -836,6 +856,7 @@ class _CaptureScreenState extends State<CaptureScreen>
     _watchdog?.cancel();
     _confirmationTimer?.cancel();
     _helpTimer?.cancel();
+    _adjustTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
     super.dispose();
@@ -932,54 +953,60 @@ class _CaptureScreenState extends State<CaptureScreen>
                       : null,
                   onHelp: () => showHelpSheet(context, HelpTopic.capture),
                 ),
-                const SizedBox(height: 8),
-                if (_guided)
-                  _ShotProgress(steps: _steps, captured: done)
-                else
-                  _ShotReminder(label: '', count: done),
-                const Spacer(),
-                // A short reminder only. The full explanation was given on the
-                // briefing screen, so nothing large sits over the frame guide.
+                // v1.5.0 layout: everything that talks to the owner is at the top, as
+                // ONE instruction chip and a compact status row; the middle of the
+                // screen (the framing box) is left clear.
+                const SizedBox(height: 4),
                 if (_confirmation != null)
                   _Confirmation(text: _confirmation!)
                 else if (_guided)
-                  _ShotReminder(label: step.label),
-                const SizedBox(height: 12),
-                if (_guided)
                   GuidanceOverlay(
                     guidance: _guidance,
                     waitingForServer: _checkInFlight,
                   ),
-                if (_exposureSupported) ...[
-                  const SizedBox(height: 10),
-                  _BrightnessControl(
-                    offset: _exposureOffset,
-                    min: _minExposure,
-                    max: _maxExposure,
-                    onChanged: (v) {
-                      // Pause the automatic stepping while the user adjusts.
-                      _lastExposureStep = DateTime.now();
-                      _setExposure(v);
-                    },
-                  ),
+                if (_guided && _guidance.checks.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  GuidanceStatusRow(guidance: _guidance),
                 ],
-                if (_zoomSupported) ...[
-                  const SizedBox(height: 8),
-                  _ZoomControl(
-                    zoom: _zoom,
-                    min: _minZoom,
-                    max: _maxZoom,
-                    auto: _zoomIsAuto,
-                    soft: _zoom > _detailZoomCap + 0.01,
-                    onChanged: (v) {
-                      // The owner takes over the zoom for this shot.
-                      _manualZoomThisShot = true;
-                      _zoomIsAuto = false;
-                      _setZoom(v);
-                    },
-                  ),
-                ],
-                const SizedBox(height: 18),
+                const Spacer(),
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 180),
+                  alignment: Alignment.bottomCenter,
+                  child: _adjustOpen
+                      ? _AdjustPanel(
+                          exposure: _exposureSupported
+                              ? _BrightnessControl(
+                                  offset: _exposureOffset,
+                                  min: _minExposure,
+                                  max: _maxExposure,
+                                  onChanged: (v) {
+                                    // Pause the automatic stepping while the user adjusts.
+                                    _lastExposureStep = DateTime.now();
+                                    _touchAdjust();
+                                    _setExposure(v);
+                                  },
+                                )
+                              : null,
+                          zoom: _zoomSupported
+                              ? _ZoomControl(
+                                  zoom: _zoom,
+                                  min: _minZoom,
+                                  max: _maxZoom,
+                                  auto: _zoomIsAuto,
+                                  soft: _zoom > _detailZoomCap + 0.01,
+                                  onChanged: (v) {
+                                    // The owner takes over the zoom for this shot.
+                                    _manualZoomThisShot = true;
+                                    _zoomIsAuto = false;
+                                    _touchAdjust();
+                                    _setZoom(v);
+                                  },
+                                )
+                              : null,
+                        )
+                      : const SizedBox(width: double.infinity),
+                ),
+                const SizedBox(height: 8),
                 _Controls(
                   canUndo: done > 0,
                   canFinish: canFinish,
@@ -990,8 +1017,15 @@ class _CaptureScreenState extends State<CaptureScreen>
                   onUndo: _undo,
                   onCapture: () => _capture(),
                   onFinish: _finish,
+                  onAdjust: (_exposureSupported || _zoomSupported) ? _toggleAdjust : null,
+                  adjustOpen: _adjustOpen,
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 10),
+                if (_guided)
+                  _ShotProgress(steps: _steps, captured: done)
+                else
+                  _ShotReminder(label: '', count: done),
+                const SizedBox(height: 6),
               ],
             ),
           ),
@@ -1039,7 +1073,7 @@ class _CaptureScreenState extends State<CaptureScreen>
 
           if (_scoring)
             Container(
-              color: Colors.black.withOpacity(0.72),
+              color: Colors.black.withValues(alpha: 0.72),
               child: Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -1051,7 +1085,7 @@ class _CaptureScreenState extends State<CaptureScreen>
                     const SizedBox(height: 6),
                     Text('This takes a few seconds per photo',
                         style: TextStyle(
-                            color: Colors.white.withOpacity(0.75),
+                            color: Colors.white.withValues(alpha: 0.75),
                             fontSize: 13)),
                   ],
                 ),
@@ -1228,7 +1262,7 @@ class _TopBar extends StatelessWidget {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.55),
+                      color: Colors.black.withValues(alpha: 0.55),
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1299,8 +1333,8 @@ class _ShotProgress extends StatelessWidget {
             color: done
                 ? const Color(0xFF2E7D32)
                 : current
-                    ? Colors.white.withOpacity(0.92)
-                    : Colors.black.withOpacity(0.42),
+                    ? Colors.white.withValues(alpha: 0.92)
+                    : Colors.black.withValues(alpha: 0.42),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1341,7 +1375,7 @@ class _ShotReminder extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.5),
+        color: Colors.black.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(14),
       ),
       child: Text(
@@ -1366,7 +1400,7 @@ class _Confirmation extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 24),
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       decoration: BoxDecoration(
-        color: const Color(0xFF2E7D32).withOpacity(0.94),
+        color: const Color(0xFF2E7D32).withValues(alpha: 0.94),
         borderRadius: BorderRadius.circular(14),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1396,6 +1430,10 @@ class _Controls extends StatelessWidget {
   final VoidCallback onCapture;
   final VoidCallback onFinish;
 
+  /// Opens the Adjust panel (brightness and zoom); null when the camera has neither.
+  final VoidCallback? onAdjust;
+  final bool adjustOpen;
+
   const _Controls({
     required this.canUndo,
     required this.canFinish,
@@ -1406,42 +1444,102 @@ class _Controls extends StatelessWidget {
     required this.onUndo,
     required this.onCapture,
     required this.onFinish,
+    this.onAdjust,
+    this.adjustOpen = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: [
-        SizedBox(
-          width: 88,
-          child: canUndo
-              ? TextButton(
-                  onPressed: busy ? null : onUndo,
-                  child:
-                      const Text('Undo', style: TextStyle(color: Colors.white)),
-                )
-              : const SizedBox.shrink(),
-        ),
-        _Shutter(
-          ready: ready,
-          autoCapture: autoCapture,
-          progress: stableProgress.clamp(0.0, 1.0),
-          onPressed: busy ? null : onCapture,
-        ),
-        SizedBox(
-          width: 88,
-          child: canFinish
-              ? TextButton(
-                  onPressed: busy ? null : onFinish,
-                  child: Text(busy ? 'Wait' : 'Done',
-                      style: const TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.w700)),
-                )
-              : const SizedBox.shrink(),
-        ),
-      ],
+    return SizedBox(
+      height: 84,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          _Shutter(
+            ready: ready,
+            autoCapture: autoCapture,
+            progress: stableProgress.clamp(0.0, 1.0),
+            onPressed: busy ? null : onCapture,
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 10),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                if (onAdjust != null)
+                  Semantics(
+                    button: true,
+                    label: 'Adjust brightness and zoom',
+                    excludeSemantics: true,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: onAdjust,
+                      child: Container(
+                        constraints: const BoxConstraints(minWidth: 56, minHeight: 48),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: adjustOpen
+                              ? Colors.white.withValues(alpha: 0.9)
+                              : Colors.black.withValues(alpha: 0.55),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Column(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.tune,
+                              size: 18,
+                              color: adjustOpen ? const Color(0xFF1F3A63) : Colors.white),
+                          Text('Adjust',
+                              style: TextStyle(
+                                  fontSize: 11.5,
+                                  color: adjustOpen ? const Color(0xFF1F3A63) : Colors.white)),
+                        ]),
+                      ),
+                    ),
+                  ),
+                if (canUndo)
+                  TextButton(
+                    style: TextButton.styleFrom(
+                        minimumSize: const Size(48, 48),
+                        padding: const EdgeInsets.symmetric(horizontal: 8)),
+                    onPressed: busy ? null : onUndo,
+                    child: const Text('Undo', style: TextStyle(color: Colors.white)),
+                  ),
+              ]),
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 10),
+              child: canFinish
+                  ? TextButton(
+                      onPressed: busy ? null : onFinish,
+                      child: Text(busy ? 'Wait' : 'Done',
+                          style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.w700)),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ),
+        ],
+      ),
     );
+  }
+}
+
+/// The slim panel that holds brightness and zoom (v1.5.0). It sits just above the
+/// shutter row, below the framing box, and hides itself 3 s after the last touch.
+class _AdjustPanel extends StatelessWidget {
+  final Widget? exposure;
+  final Widget? zoom;
+  const _AdjustPanel({this.exposure, this.zoom});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      if (exposure != null) exposure!,
+      if (exposure != null && zoom != null) const SizedBox(height: 4),
+      if (zoom != null) zoom!,
+    ]);
   }
 }
 
@@ -1532,9 +1630,9 @@ class _HelpCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Positioned(
-      left: 20,
-      right: 20,
-      bottom: 150,
+      left: 14,
+      right: 14,
+      top: MediaQuery.of(context).padding.top + 112,
       child: Material(
         color: Colors.transparent,
         child: Container(

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -22,9 +23,12 @@ import '../services/pqf_api.dart';
 /// v1.1.0: the four indicator lights were removed. They repeated what the one
 /// instruction already says and competed with it for attention; the banner now
 /// carries the status (green tick: ready, amber bulb: one thing to fix).
-class GuidanceOverlay extends StatelessWidget {
+class GuidanceOverlay extends StatefulWidget {
   final GuidanceResult guidance;
   final bool waitingForServer;
+
+  /// How long the chip stays open before it collapses to its icon.
+  static const Duration collapseAfter = Duration(seconds: 3);
 
   const GuidanceOverlay({
     super.key,
@@ -33,16 +37,138 @@ class GuidanceOverlay extends StatelessWidget {
   });
 
   @override
+  State<GuidanceOverlay> createState() => _GuidanceOverlayState();
+}
+
+/// v1.5.0: ONE instruction chip at the top of the camera. It collapses to its icon
+/// after 3 s and opens again when the message changes or when it is tapped.
+class _GuidanceOverlayState extends State<GuidanceOverlay> {
+  bool _collapsed = false;
+  Timer? _timer;
+  String _shown = '';
+
+  String get _message {
+    final g = widget.guidance;
+    if (g.checks.isEmpty)
+      return widget.waitingForServer
+          ? 'Checking the shot'
+          : 'Point the camera at your product';
+    return g.ready
+        ? 'Looks good. Take the photo'
+        : (g.primaryInstruction ?? 'Adjust the shot');
+  }
+
+  void _arm() {
+    _timer?.cancel();
+    _timer = Timer(GuidanceOverlay.collapseAfter, () {
+      if (mounted) setState(() => _collapsed = true);
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _shown = _message;
+    _arm();
+  }
+
+  @override
+  void didUpdateWidget(covariant GuidanceOverlay old) {
+    super.didUpdateWidget(old);
+    if (_message != _shown) {
+      _shown = _message;
+      _collapsed = false;
+      _arm();
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final g = widget.guidance;
     return Semantics(
       liveRegion: true,
-      child: _InstructionBanner(
-        instruction: guidance.primaryInstruction,
-        ready: guidance.ready,
-        waiting: waitingForServer,
-        hasData: guidance.checks.isNotEmpty,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          setState(() => _collapsed = !_collapsed);
+          if (!_collapsed) _arm();
+        },
+        child: Align(
+          alignment: Alignment.center,
+          child: _InstructionBanner(
+            instruction: g.primaryInstruction,
+            ready: g.ready,
+            waiting: widget.waitingForServer,
+            hasData: g.checks.isNotEmpty,
+            collapsed: _collapsed,
+          ),
+        ),
       ),
     );
+  }
+}
+
+/// Compact status icons with words (never colour alone): framing, focus, light and
+/// background, each with a tick when it passes and a warning mark when it does not.
+class GuidanceStatusRow extends StatelessWidget {
+  final GuidanceResult guidance;
+  const GuidanceStatusRow({super.key, required this.guidance});
+
+  static const _items = <(String, String, IconData)>[
+    ('framing', 'Framing', Icons.crop_free),
+    ('sharpness', 'Focus', Icons.center_focus_strong_outlined),
+    ('exposure', 'Light', Icons.wb_sunny_outlined),
+    ('background', 'Background', Icons.wallpaper_outlined),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final byName = {for (final c in guidance.checks) c.name: c.passed};
+    return FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            for (final (key, label, icon) in _items)
+              if (byName.containsKey(key))
+                Semantics(
+                  label:
+                      '$label: ${byName[key] == false ? 'needs attention' : 'good'}',
+                  excludeSemantics: true,
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(icon, size: 13, color: Colors.white),
+                      const SizedBox(width: 3),
+                      Text(label,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 10.5)),
+                      const SizedBox(width: 3),
+                      Icon(
+                          byName[key] == false
+                              ? Icons.error_outline
+                              : Icons.check_circle,
+                          size: 13,
+                          color: byName[key] == false
+                              ? const Color(0xFFFFC857)
+                              : const Color(0xFF7BD88F)),
+                    ]),
+                  ),
+                ),
+          ],
+        ));
   }
 }
 
@@ -51,12 +177,14 @@ class _InstructionBanner extends StatelessWidget {
   final bool ready;
   final bool waiting;
   final bool hasData;
+  final bool collapsed;
 
   const _InstructionBanner({
     required this.instruction,
     required this.ready,
     required this.waiting,
     required this.hasData,
+    this.collapsed = false,
   });
 
   @override
@@ -82,7 +210,8 @@ class _InstructionBanner extends StatelessWidget {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       margin: const EdgeInsets.symmetric(horizontal: 20),
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+      padding: EdgeInsets.symmetric(
+          horizontal: collapsed ? 13 : 16, vertical: collapsed ? 10 : 9),
       decoration: BoxDecoration(
         color: background,
         borderRadius: BorderRadius.circular(26),
@@ -91,19 +220,20 @@ class _InstructionBanner extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, color: Colors.white, size: 21),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Text(
-              text,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 15.5,
-                fontWeight: FontWeight.w600,
-                height: 1.25,
+          if (!collapsed) const SizedBox(width: 10),
+          if (!collapsed)
+            Flexible(
+              child: Text(
+                text,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.2,
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -156,13 +286,15 @@ class GuideShape {
 
   static GuideShape forShot(String shotType, Rect frame) {
     if (shotType == 'detail') {
-      return GuideShape(GuideKind.corners, frame.deflate(frame.shortestSide * detailInset));
+      return GuideShape(
+          GuideKind.corners, frame.deflate(frame.shortestSide * detailInset));
     }
     final box = Rect.fromCenter(
         center: frame.center,
         width: frame.width * boxShare,
         height: frame.height * boxShare);
-    return GuideShape(shotType == 'angle' ? GuideKind.boxWithTurn : GuideKind.box, box);
+    return GuideShape(
+        shotType == 'angle' ? GuideKind.boxWithTurn : GuideKind.box, box);
   }
 }
 
@@ -207,11 +339,12 @@ class ScoredRegionGuide extends StatelessWidget {
       return IgnorePointer(
         child: LayoutBuilder(builder: (context, c) {
           final rectH = math.min(c.maxWidth * 5 / 4, c.maxHeight);
-          final rect = Rect.fromLTWH(0, (c.maxHeight - rectH) / 2, c.maxWidth, rectH);
+          final rect =
+              Rect.fromLTWH(0, (c.maxHeight - rectH) / 2, c.maxWidth, rectH);
           return CustomPaint(
             size: Size(c.maxWidth, c.maxHeight),
-            painter: _ScoredRegionPainter(
-                rect: rect, borderColor: Colors.white70),
+            painter:
+                _ScoredRegionPainter(rect: rect, borderColor: Colors.white70),
           );
         }),
       );
@@ -362,14 +495,17 @@ class _ScoredRegionPainter extends CustomPainter {
           _drawDashedRRect(canvas, box, under);
           _drawDashedRRect(canvas, box, paint);
         }
-        if (g.kind == GuideKind.boxWithTurn) _drawTurnArrow(canvas, g.rect, under, paint);
+        if (g.kind == GuideKind.boxWithTurn)
+          _drawTurnArrow(canvas, g.rect, under, paint);
       case GuideKind.corners:
         final len = g.rect.shortestSide * 0.14;
         final path = Path();
         final r = g.rect;
         for (final (corner, dx, dy) in [
-          (r.topLeft, 1.0, 1.0), (r.topRight, -1.0, 1.0),
-          (r.bottomLeft, 1.0, -1.0), (r.bottomRight, -1.0, -1.0),
+          (r.topLeft, 1.0, 1.0),
+          (r.topRight, -1.0, 1.0),
+          (r.bottomLeft, 1.0, -1.0),
+          (r.bottomRight, -1.0, -1.0),
         ]) {
           path
             ..moveTo(corner.dx + dx * len, corner.dy)
@@ -398,7 +534,7 @@ class _ScoredRegionPainter extends CustomPainter {
     final path = Path()..addArc(arc, start, sweep);
     final end = Offset(centre.dx + radius * math.cos(start + sweep),
         centre.dy + radius * math.sin(start + sweep));
-    final tangent = start + sweep + math.pi / 2;          // direction of travel
+    final tangent = start + sweep + math.pi / 2; // direction of travel
     final head = radius * 0.45;
     for (final side in [-0.5, 0.5]) {
       final a = tangent + math.pi + side;
