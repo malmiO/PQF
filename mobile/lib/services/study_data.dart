@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
 import 'package:flutter/foundation.dart';
@@ -17,7 +16,7 @@ import 'study_log.dart';
 ///
 /// Layout under the app's private folder (the same `study/` folder as study_log.jsonl):
 ///   study/study_log.jsonl
-///   study/photos/<participant>_<condition>/<sha256>.jpg
+///   study/photos/`<participant>_<condition>`/`<sha256>`.jpg
 ///
 /// Everything here is a no-op outside study mode, and nothing here throws: a storage
 /// problem must never stop a participant's session (the same rule as StudyLog.log).

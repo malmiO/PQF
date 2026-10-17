@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'config/api_config.dart';
-import 'screens/home_screen.dart';
+import 'screens/auth_gate.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/privacy_screen.dart';
 
@@ -92,14 +92,14 @@ class PqfApp extends StatelessWidget {
         ),
       ),
       routes: {
-        '/home': (_) => const HomeScreen(),
+        '/home': (_) => const AuthGate(),
         '/privacy': (_) => const PrivacyScreen(firstRun: true),
       },
       home: showOnboarding
           ? const OnboardingScreen(firstRun: true)
           : showPrivacy
               ? const PrivacyScreen(firstRun: true)
-              : const HomeScreen(),
+              : const AuthGate(),
     );
   }
 }

@@ -1,0 +1,11 @@
+# Launcher icon (2026-10-15): the Eclat logo. Run from mobile/:
+#   dart run flutter_launcher_icons
+# This file takes precedence over the flutter_launcher_icons block in pubspec.yaml.
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icon/app_icon.png"
+  min_sdk_android: 29
+  adaptive_icon_background: "#062055"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
+  adaptive_icon_foreground_inset: 0

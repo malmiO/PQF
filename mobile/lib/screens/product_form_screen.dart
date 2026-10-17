@@ -4,14 +4,22 @@ import 'package:flutter/material.dart';
 import '../services/pqf_api.dart';
 import '../models/business_profile.dart';
 import '../widgets/help_sheet.dart';
+import '../widgets/preflight_dialog.dart';
+import 'capture_screen.dart';
 import 'mode_screen.dart';
+import 'upload_screen.dart';
 
 /// Step 1 of a product: what it is, and how its video should look.
 ///
 /// Everything the video needs is asked HERE, once, so the rest of the flow
 /// (photos, checking, the video) runs without further questions.
+/// Which capture path the owner picked on the home screen (v1.5.0). `ask` shows the
+/// older "How would you like to start?" screen.
+enum CaptureStart { ask, guided, upload }
+
 class ProductFormScreen extends StatefulWidget {
-  const ProductFormScreen({super.key});
+  final CaptureStart start;
+  const ProductFormScreen({super.key, this.start = CaptureStart.ask});
 
   @override
   State<ProductFormScreen> createState() => _ProductFormScreenState();
@@ -133,12 +141,24 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       mood: _mood,
       format: _format,
       shop: profile.shop,
-      contact: profile.contact,
+      contact: profile.videoContact,
       brandColour: profile.colour,
     );
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ModeScreen(draft: draft),
-    ));
+    switch (widget.start) {
+      case CaptureStart.guided:
+        // Same setup advice as the Mode screen's guided card.
+        final ready = await PreflightDialog.show(context);
+        if (!ready || !mounted) return;
+        Navigator.of(context)
+            .push(MaterialPageRoute(builder: (_) => CaptureScreen(draft: draft)));
+      case CaptureStart.upload:
+        Navigator.of(context)
+            .push(MaterialPageRoute(builder: (_) => UploadScreen(draft: draft)));
+      case CaptureStart.ask:
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => ModeScreen(draft: draft),
+        ));
+    }
   }
 
   @override

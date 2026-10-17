@@ -2,7 +2,6 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../models/api_result.dart';
 import '../services/pqf_api.dart';
 import '../widgets/error_view.dart';
 import '../widgets/help_sheet.dart';
@@ -158,7 +157,7 @@ class _UploadScreenState extends State<UploadScreen> {
                 color: Colors.white,
                 boxShadow: [
                   BoxShadow(
-                      color: Colors.black.withOpacity(0.06),
+                      color: Colors.black.withValues(alpha: 0.06),
                       blurRadius: 10,
                       offset: const Offset(0, -2)),
                 ],

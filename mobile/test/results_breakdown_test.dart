@@ -4,7 +4,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mobile/models/product_draft.dart';
 import 'package:mobile/models/study_session.dart';
 import 'package:mobile/screens/results_screen.dart';
 import 'package:mobile/services/pqf_api.dart';

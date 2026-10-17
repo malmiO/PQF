@@ -11,6 +11,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:mobile/screens/business_profile_screen.dart';
+import 'package:mobile/screens/auth_screen.dart';
+import 'package:mobile/screens/profile_screen.dart';
+import 'package:mobile/services/auth_service.dart';
 import 'package:mobile/screens/home_screen.dart';
 import 'package:mobile/screens/making_video_screen.dart';
 import 'package:mobile/screens/mode_screen.dart';
@@ -72,6 +75,9 @@ final screens = <String, Widget Function()>{
   'Making video (error state)': () => MakingVideoScreen(
       draft: draft, set: [SetPhoto(bytes: png, role: 'hero_shot', fqs: 0.8)]),
   'My shop': () => const BusinessProfileScreen(),
+  'Set up your shop (first run)': () => const BusinessProfileScreen(firstRun: true),
+  'Create account': () => AuthScreen(auth: AuthService(store: MemorySecureStore()), onDone: (_) {}),
+  'Profile': () => ProfileScreen(auth: AuthService(store: MemorySecureStore())),
   'Privacy': () => const PrivacyScreen(),
   'Onboarding': () => const OnboardingScreen(),
   'Study start': () => const StudyStartScreen(),

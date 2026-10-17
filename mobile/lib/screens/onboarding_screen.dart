@@ -1,27 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../widgets/intro_art.dart';
 import 'privacy_screen.dart';
 
-/// First-run guide: three short screens that set expectations before the camera.
+/// First-run introduction (v1.5.0): three pages with vector illustrations.
 ///
-/// Shown once on first launch (remembered with shared_preferences) and reachable
-/// again from "How it works" on the home screen. Kept to three screens, because
-/// a seller came to photograph a product, not to read a manual.
+/// Shown once on first launch (a stored flag) and reachable again from "Help" on the
+/// home screen. The v1.5.0 pages replace the v1.4 text-only ones, so the flag key is
+/// new: everyone sees the new introduction once.
 class OnboardingScreen extends StatefulWidget {
-  /// True on first launch: finishing replaces this with the home screen. When
-  /// opened later from "How it works", it simply pops.
+  /// True on first launch: finishing continues into the app. When opened later from
+  /// Help, it simply pops.
   final bool firstRun;
 
   const OnboardingScreen({super.key, this.firstRun = false});
 
-  static const String _seenKey = 'onboarding_seen_v1';
+  static const String seenKey = 'onboarding_seen_v2';
 
-  /// Whether the guide has already been shown. Defaults to false (show it) if
+  /// Whether the introduction has been shown. Defaults to false (show it) if
   /// preferences cannot be read, so a first run is never silently skipped.
   static Future<bool> seen() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      return prefs.getBool(_seenKey) ?? false;
+      return prefs.getBool(seenKey) ?? false;
     } catch (_) {
       return false;
     }
@@ -30,9 +31,9 @@ class OnboardingScreen extends StatefulWidget {
   static Future<void> markSeen() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_seenKey, true);
+      await prefs.setBool(seenKey, true);
     } catch (_) {
-      // Non-fatal: the guide shows again next launch, which is harmless.
+      // Non-fatal: the introduction shows again next launch, which is harmless.
     }
   }
 
@@ -46,21 +47,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   static const _pages = <_OnboardPage>[
     _OnboardPage(
-      icon: Icons.photo_camera_outlined,
-      title: 'What PQF does',
-      body: 'Take product photos that sell, and get a ready video.',
+      art: IntroArt.whatIs,
+      title: 'Welcome to Éclat',
+      body: 'Take certified product photos and get a short promo video, '
+          'all from your phone.',
     ),
     _OnboardPage(
-      icon: Icons.light_mode_outlined,
-      title: 'What you need',
-      body: 'A light box, or a white sheet near a window. A phone stand if you '
-          'have one.',
-    ),
-    _OnboardPage(
-      icon: Icons.route_outlined,
+      art: IntroArt.howItWorks,
       title: 'How it works',
-      body: 'Product details, then photos. We check them and choose your set. '
-          'Then you get your video.',
+      body: 'Guided capture, then a quality check. We pick your best set and '
+          'turn it into a video.',
+    ),
+    _OnboardPage(
+      art: IntroArt.bestSetup,
+      title: 'Set up for the best photos',
+      body: 'Use a light box or a white background, a steady phone or tripod, '
+          'and good light.',
     ),
   ];
 
@@ -68,8 +70,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     await OnboardingScreen.markSeen();
     if (!mounted) return;
     if (widget.firstRun) {
-      // Replace with the privacy notice (once) or the home screen, so Back
-      // does not return to the guide.
       final privacySeen = await PrivacyScreen.seen();
       if (!mounted) return;
       Navigator.of(context).pushReplacementNamed(privacySeen ? '/home' : '/privacy');
@@ -127,8 +127,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
               child: FilledButton(
-                style:
-                    FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
                 onPressed: () {
                   if (last) {
                     _finish();
@@ -139,9 +138,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     );
                   }
                 },
-                child: Text(last
-                    ? (widget.firstRun ? 'Get started' : 'Done')
-                    : 'Next'),
+                child: Text(last ? (widget.firstRun ? 'Get started' : 'Done') : 'Next'),
               ),
             ),
           ],
@@ -152,36 +149,37 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 }
 
 class _OnboardPage extends StatelessWidget {
-  final IconData icon;
+  final IntroArt art;
   final String title;
   final String body;
 
-  const _OnboardPage({
-    required this.icon,
-    required this.title,
-    required this.body,
-  });
+  const _OnboardPage({required this.art, required this.title, required this.body});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 86, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(height: 34),
-          Text(title,
-              textAlign: TextAlign.center,
-              style:
-                  const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 16),
-          Text(body,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  fontSize: 16, color: Colors.grey.shade700, height: 1.5)),
-        ],
-      ),
-    );
+    return LayoutBuilder(builder: (context, box) {
+      // The picture shrinks on a small screen or with large text, so nothing overflows.
+      final artSize = (box.maxHeight * 0.42).clamp(120.0, 250.0);
+      return SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: box.maxHeight),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IntroIllustration(art: art, size: artSize),
+              const SizedBox(height: 24),
+              Text(title,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 14),
+              Text(body,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16, color: Colors.grey.shade700, height: 1.5)),
+            ],
+          ),
+        ),
+      );
+    });
   }
 }

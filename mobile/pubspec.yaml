@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.5.0+3
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -73,6 +73,10 @@ dependencies:
   # appears on first launch.
   shared_preferences: ^2.3.2
 
+  # Prototype on-device account (v1.5.0): the salted password hash is kept here,
+  # never the password itself.
+  flutter_secure_storage: ^11.2.0
+
   # SHA-256 of photo bytes for the study log (already a transitive dependency).
   crypto: ^3.0.6
 
@@ -98,31 +102,30 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
-  # Generates the launcher icon (and Android 13+ themed icon) for every density
-  # from assets/branding/icon.png. Run: dart run flutter_launcher_icons
+  # Generates the launcher icon. Its settings live in flutter_launcher_icons.yaml
+  # (not in this file). Run: dart run flutter_launcher_icons
   flutter_launcher_icons: ^0.14.1
 
   # Generates the launch/splash screen from the same branding image.
   # Run: dart run flutter_native_splash:create
   flutter_native_splash: ^2.4.1
 
-# Launcher icon generation (placeholder art; replace assets/branding/icon.png
-# with the final 1024x1024 design, then re-run the generator).
-flutter_launcher_icons:
-  android: true
-  ios: true
-  image_path: "assets/branding/icon.png"
-  min_sdk_android: 29
-  adaptive_icon_background: "#1F3A63"
-  adaptive_icon_foreground: "assets/branding/icon.png"
-
-# Launch/splash screen (placeholder; brand navy with the same mark).
+# Launch/splash screen: the Eclat logo on its own navy (2026-10-15).
+# Run: dart run flutter_native_splash:create
+  path_provider_platform_interface: any
+  plugin_platform_interface: any
+  share_plus_platform_interface: any
 flutter_native_splash:
-  color: "#1F3A63"
-  image: "assets/branding/icon.png"
+  color: "#062055"
+  image: "assets/icon/app_icon.png"
+  android: true
+  ios: false
+  web: false
   android_12:
-    color: "#1F3A63"
-    image: "assets/branding/icon.png"
+    color: "#062055"
+    # Android 12 masks the icon to a circle: the padded glyph keeps the corners visible.
+    image: "assets/icon/app_icon_foreground.png"
+    icon_background_color: "#062055"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

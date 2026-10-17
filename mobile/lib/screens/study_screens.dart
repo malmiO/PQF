@@ -1,3 +1,4 @@
+import 'dart:io' show File;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import '../config/api_config.dart';
 import '../models/study_session.dart';
 import '../services/study_data.dart';
 import '../services/study_log.dart';
+import '../services/study_share.dart';
 import 'product_form_screen.dart';
 
 /// Opens study mode after the PIN (PQF_STUDY_PIN in config.env). Hidden: reached
@@ -17,28 +19,10 @@ Future<void> openStudyMode(BuildContext context) async {
         content: Text('Study mode is not set up (PQF_STUDY_PIN in config.env).')));
     return;
   }
-  final controller = TextEditingController();
   final ok = await showDialog<bool>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Study mode'),
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        obscureText: true,
-        maxLength: 4,
-        keyboardType: TextInputType.number,
-        decoration: const InputDecoration(labelText: 'PIN'),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-        FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text == pin),
-            child: const Text('Open')),
-      ],
-    ),
+    builder: (_) => _PinDialog(pin: pin),
   );
-  controller.dispose();
   if (!context.mounted || ok == null) return;
   if (!ok) {
     ScaffoldMessenger.of(context)
@@ -47,6 +31,51 @@ Future<void> openStudyMode(BuildContext context) async {
   }
   Navigator.of(context)
       .push(MaterialPageRoute(builder: (_) => const StudyStartScreen()));
+}
+
+/// The PIN prompt. It owns its text controller, so the controller is disposed with the
+/// dialog and not while the dialog's closing animation is still drawing the field
+/// (the earlier version disposed it as soon as showDialog returned). Returns true only
+/// when the typed PIN equals [pin]; Cancel and an empty field return false.
+class _PinDialog extends StatefulWidget {
+  final String pin;
+
+  const _PinDialog({required this.pin});
+
+  @override
+  State<_PinDialog> createState() => _PinDialogState();
+}
+
+class _PinDialogState extends State<_PinDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Study mode'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        obscureText: true,
+        maxLength: 4,
+        keyboardType: TextInputType.number,
+        decoration: const InputDecoration(labelText: 'PIN'),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        FilledButton(
+            onPressed: () => Navigator.pop(context, _controller.text == widget.pin),
+            child: const Text('Open')),
+      ],
+    );
+  }
 }
 
 /// Start of a session: participant code, product code and session number. The
@@ -70,6 +99,9 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
   // What study data is on this phone (photos and log), for the export card.
   ({int photos, int bytes, bool hasLog})? _data;
   bool _busy = false;
+
+  /// The zip written by the last successful export, so it can be shared again.
+  File? _lastZip;
 
   @override
   void initState() {
@@ -101,12 +133,16 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
     setState(() => _busy = true);
     try {
       final r = await StudyData.export();
+      if (mounted) setState(() => _lastZip = r.zip);
       _say(
           r.adbReachable
               ? 'Exported. On the laptop: adb pull "${r.zip.path}"'
               : "Exported to the app's private folder (not reachable with adb): "
                   '${r.zip.path}',
           seconds: 20);
+      // Open the share sheet once, right after a successful export. The zip is already
+      // written, so closing the sheet loses nothing; "Share" below opens it again.
+      await _share(r.zip);
     } on StateError catch (e) {
       _say(e.message);
     } catch (e) {
@@ -114,6 +150,15 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
       await _refreshData();
+    }
+  }
+
+  /// Opens the Android share sheet for [zip]. A failure here never undoes the export.
+  Future<void> _share(File zip) async {
+    try {
+      await StudyShare.share(zip);
+    } catch (e) {
+      _say('The share sheet could not be opened: $e');
     }
   }
 
@@ -282,6 +327,20 @@ class _StudyStartScreenState extends State<StudyStartScreen> {
             onPressed: _busy ? null : _export,
             child: const Text('Export study data'),
           ),
+          if (_lastZip != null) ...[
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              onPressed: _busy ? null : () => _share(_lastZip!),
+              icon: const Icon(Icons.share),
+              label: const Text('Share the last export'),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(_lastZip!.uri.pathSegments.last,
+                  style: const TextStyle(fontSize: 12)),
+            ),
+          ],
           const SizedBox(height: 10),
           OutlinedButton(
             style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
