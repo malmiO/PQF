@@ -1,0 +1,235 @@
+{
+  "framework": "PQF (Photography Quality Framework)",
+  "spec_version": "1.4",
+  "release": "1.4.0",
+  "commit": "2a3a358",
+  "platform_formatting": {
+    "aspect_min": 0.8,
+    "aspect_max": 1.91,
+    "out_of_range": "centre crop to nearest limit (backend/api/main.py _platform_format)",
+    "in_range": "returned unchanged",
+    "max_longest_side_px_before_crop": 2048
+  },
+  "gate_T0": {
+    "min_resolution_px": [
+      640,
+      640
+    ],
+    "aspect_ratio": {
+      "min": 0.8,
+      "max": 1.91
+    }
+  },
+  "working_resolution_px": {
+    "longest_side": 1024
+  },
+  "technical": [
+    {
+      "id": "T1",
+      "name": "sharpness",
+      "region": "product region (product_mask)",
+      "measure": "Sharpness (Laplacian variance).",
+      "parameters": {
+        "S_MAX": 1134.6
+      },
+      "weight": 0.27,
+      "pass_threshold": 0.2,
+      "status": "active"
+    },
+    {
+      "id": "T2",
+      "name": "exposure",
+      "region": "product region (product_mask)",
+      "measure": "Exposure (mean luminance in [0,255]). Penalise distance from ideal band.",
+      "parameters": {
+        "ideal_low": 100.0,
+        "ideal_high": 180.0,
+        "tolerance": 60.0
+      },
+      "weight": 0.22,
+      "pass_threshold": 0.6,
+      "status": "active"
+    },
+    {
+      "id": "T3",
+      "name": "background",
+      "region": "border band",
+      "measure": "Background purity (fraction of near-white border pixels).",
+      "parameters": {
+        "white_threshold": 220,
+        "border_fraction": 0.1
+      },
+      "weight": 0.22,
+      "pass_threshold": 0.55,
+      "status": "active"
+    },
+    {
+      "id": "T4",
+      "name": "brisque",
+      "region": "whole frame",
+      "measure": "BRISQUE (0..100, lower better). brisque_norm = clip(1 - raw/MAX, 0, 1)",
+      "parameters": {
+        "raw_max": 100.0
+      },
+      "weight": 0.0,
+      "pass_threshold": 0.0,
+      "status": "computed, weight 0: failed construct validity (v1.4)"
+    },
+    {
+      "id": "T5",
+      "name": "piqe",
+      "region": "product bounding-box crop (product_bbox)",
+      "measure": "PIQE (0..100, lower better). piqe_norm = clip(1 - raw/MAX, 0, 1)",
+      "parameters": {
+        "raw_max": 100.0,
+        "min_crop_px": 64
+      },
+      "weight": 0.17,
+      "pass_threshold": 0.33,
+      "status": "active"
+    },
+    {
+      "id": "T6",
+      "name": "colorcast",
+      "region": "near-white border pixels",
+      "measure": "Colour-cast detection (v1.2). Grey-world in the T3 neutral region only.",
+      "parameters": {
+        "C_MAX": 5.0,
+        "min_neutral_fraction": 0.05,
+        "white_threshold": 220,
+        "border_fraction": 0.1
+      },
+      "weight": 0.12,
+      "pass_threshold": 0.6,
+      "status": "active"
+    }
+  ],
+  "semantic": {
+    "model": "gemini-3.5-flash-lite",
+    "prompt_version": "pqf-sem-v1",
+    "temperature": 0.0,
+    "criteria": [
+      {
+        "id": "S1",
+        "name": "subject_centering",
+        "description": "Is the product well-composed and well-centred in the frame, not cut off or awkwardly placed?",
+        "weight": 0.25,
+        "pass_threshold": 0.6
+      },
+      {
+        "id": "S2",
+        "name": "feature_visibility",
+        "description": "Are the product's key features, details, label text, and texture clearly visible?",
+        "weight": 0.25,
+        "pass_threshold": 0.6
+      },
+      {
+        "id": "S3",
+        "name": "marketing_suitability",
+        "description": "Does the image look professional and suitable for social-media marketing of this product?",
+        "weight": 0.25,
+        "pass_threshold": 0.6
+      },
+      {
+        "id": "S4",
+        "name": "angle_value",
+        "description": "Does the camera angle show useful information about the product (e.g. a meaningful view), beyond a flat generic shot?",
+        "weight": 0.15,
+        "pass_threshold": 0.5
+      },
+      {
+        "id": "S5",
+        "name": "lighting_style_quality",
+        "description": "Is the lighting and overall visual style good for presenting this product attractively?",
+        "weight": 0.1,
+        "pass_threshold": 0.5
+      }
+    ]
+  },
+  "combination": {
+    "FQS": "alpha*TQS + beta*SQS",
+    "alpha": 0.4,
+    "beta": 0.6,
+    "pass": {
+      "FQS_min": 0.55
+    },
+    "hard_reject_TQS_below": 0.4
+  },
+  "roles": {
+    "hero_shot": {
+      "fqs_min": 0.75,
+      "criteria_min": {
+        "subject_centering": 0.7,
+        "marketing_suitability": 0.7
+      }
+    },
+    "angle_shot": {
+      "fqs_min": 0.6,
+      "criteria_min": {
+        "angle_value": 0.6
+      }
+    },
+    "detail_shot": {
+      "fqs_min": 0.6,
+      "criteria_min": {
+        "feature_visibility": 0.7
+      }
+    }
+  },
+  "role_priority": [
+    "hero_shot",
+    "angle_shot",
+    "detail_shot"
+  ],
+  "set_gate": {
+    "min_hero": 1,
+    "hero_fqs_min": 0.75,
+    "min_distinct_angles": 2,
+    "min_detail": 1,
+    "detail_feature_visibility_min": 0.7,
+    "all_selected_fqs_min": 0.55,
+    "set_size": {
+      "min": 4,
+      "max": 6
+    },
+    "required_roles": [
+      "hero_shot",
+      "angle_shot",
+      "detail_shot"
+    ],
+    "distinct_angle_rule": ">= 2 angle_shots with distinct angles"
+  },
+  "selection": {
+    "required_roles": [
+      "hero_shot",
+      "angle_shot",
+      "detail_shot"
+    ],
+    "angle_shots": 2,
+    "distinct_angle_rule": "angle differs from main shot and from other chosen angles by view_distance >= near_duplicate_distance",
+    "near_duplicate_distance": 0.15,
+    "set_size": 4,
+    "diversity_fqs_weight": 0.25
+  },
+  "live_guidance_proxy": {
+    "certifies": false,
+    "thresholds": {
+      "longest_side": 512,
+      "pass_min": 0.4,
+      "sharpness_min": 0.12,
+      "min_product_area": 0.1,
+      "max_product_area": 0.68,
+      "centre_tolerance": 0.34,
+      "bg_grey_min": 140,
+      "bg_uniform_spread": 40,
+      "zoom_target_area": {
+        "main": 0.32,
+        "angle": 0.32,
+        "extra": 0.32,
+        "detail": 0.55
+      },
+      "zoom_edge_limit": 0.92,
+      "zoom_min_step": 0.08
+    }
+  }
+}
