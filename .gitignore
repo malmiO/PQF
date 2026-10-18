@@ -89,6 +89,7 @@ pqf_fixes_*/
 pqf_update_*/
 apply_fixes_*.py
 *.mp4
+!docs/assets/*.mp4
 Thumbs.db
 
 research/results/study_log.jsonl
