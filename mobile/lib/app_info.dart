@@ -13,6 +13,5 @@ class AppInfo {
   /// The research attribution shown on the About screen.
   static const String attribution =
       'An app built on the Photography Quality Framework (PQF). '
-      'BSc (Hons) Computing research, D J A M O Nayanaransi, '
-      'NIBM / Coventry University.';
+      ;
 }

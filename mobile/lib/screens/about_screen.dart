@@ -88,16 +88,6 @@ class _AboutScreenState extends State<AboutScreen> {
               onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const PrivacyScreen())),
             ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.article_outlined),
-              title: const Text('Open-source licences'),
-              onTap: () => showLicensePage(
-                context: context,
-                applicationName: AppInfo.name,
-                applicationVersion: '${AppInfo.version} (build ${AppInfo.build})',
-              ),
-            ),
           ],
         ),
       ),
@@ -117,7 +107,9 @@ class _ServerVersion extends StatelessWidget {
     if (loading) {
       return Row(children: [
         const SizedBox(
-            width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2)),
+            width: 13,
+            height: 13,
+            child: CircularProgressIndicator(strokeWidth: 2)),
         const SizedBox(width: 10),
         Text('Checking server…', style: style),
       ]);
@@ -126,8 +118,7 @@ class _ServerVersion extends StatelessWidget {
     if (h == null) {
       return Text('Server version unavailable (not connected).', style: style);
     }
-    return Text(
-        'Server release ${h.release}, framework ${h.frameworkVersion}',
+    return Text('Server release ${h.release}, framework ${h.frameworkVersion}',
         style: style);
   }
 }
